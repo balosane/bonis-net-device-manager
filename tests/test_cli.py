@@ -47,3 +47,39 @@ def test_plan_command_reports_unreachable_device(tmp_path, monkeypatch):
                    "--credentials", str(tmp_path / "c.yml"), "--out", str(out)])
     assert rc == 1
     assert json.loads(out.read_text())["devices"][0]["error"].startswith("RuntimeError")
+
+
+def test_selftest_and_demo_pass(capsys):
+    assert cli.main(["selftest"]) == 0
+    assert "12/12 checks passed" in capsys.readouterr().out
+    assert cli.main(["demo"]) == 0
+    out = capsys.readouterr().out
+    assert "DEMO-ROUTER" in out and "plan_id" in out and "SuperSecretPsk" not in out
+
+
+def test_try_uses_fake_ssh_and_excludes_factory_lan(tmp_path, monkeypatch, capsys):
+    from bonis_netdev import samples
+    (tmp_path / "c.yml").write_text(yaml.safe_dump({"credential_sets": [{"username": "u", "password": "p"}]}))
+    t = samples.ros_transport("10.0.0.23")
+    monkeypatch.setattr(cli.SshReadTransport, "read", lambda self, cmd: t.read(cmd))
+    monkeypatch.setattr(cli.SshReadTransport, "host", "10.0.0.23", raising=False)
+    out = tmp_path / "p.json"
+    rc = cli.main(["try", "10.0.0.23", "--dns", "192.168.238.119,192.168.6.1", "--credentials", str(tmp_path / "c.yml"),
+                   "--out", str(out)])
+    assert rc == 0
+    text = capsys.readouterr().out
+    assert "2 change(s)" in text and "192.168.88.0/24 excluded" in text
+    assert cli.main(["check", str(out)]) == 0
+
+
+def test_try_rejects_bad_dns(tmp_path, capsys):
+    (tmp_path / "c.yml").write_text(yaml.safe_dump({"credential_sets": []}))
+    assert cli.main(["try", "1.2.3.4", "--dns", "nonsense", "--credentials", str(tmp_path / "c.yml")]) == 2
+
+
+def test_missing_credentials_is_a_clear_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("NETDEV_CREDENTIALS", raising=False)
+    assert cli.main(["probe", "1.2.3.4"]) == 2
+    assert "no credentials file" in capsys.readouterr().err

@@ -24,6 +24,25 @@ pip install .                 # Python 3.10+, installs the `netdev` command
 # or the container: docker build -t netdev . && docker run --rm -v "$PWD:/w" -w /w netdev --help
 ```
 
+## Try it in two minutes
+
+```bash
+netdev selftest                 # 12 safety checks on fake devices: no network, no credentials
+netdev demo                     # a sample plan for a fake router and a fake AP
+```
+
+With a credentials file (`./credentials.yml`, `$NETDEV_CREDENTIALS` or `~/.config/netdev/credentials.yml`,
+format in `examples/credentials.example.yml`), on a real device (read-only, nothing is changed):
+
+```bash
+netdev probe 10.0.0.23                                       # device class + the DNS values the tool sees
+netdev try   10.0.0.23 --dns 192.168.238.119,192.168.6.1     # the plan for one device, no files needed
+netdev try   192.168.130.66 --dns 192.168.238.119,192.168.6.1 --resolver   # an AP: its own resolver
+netdev try   10.0.0.23 --dns 1.1.1.1 --exclude 10.15.5.0/24 --out plan.json
+```
+
+`192.168.88.0/24` (MikroTik factory LAN) is always excluded; `--exclude` adds more prefixes.
+
 ## Use
 
 ```bash
