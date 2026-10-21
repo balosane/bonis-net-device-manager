@@ -1,0 +1,11 @@
+# Intent: WHAT should be true. Nothing here says how a device does it.
+intent: dns
+primary: 192.168.238.119     # mor-fw-1
+secondary: 192.168.6.1
+# extra: [2a09:9c07:6::1]    # appended after the secondary (IPv6 resolver)
+scope:
+  kind: dhcp-networks        # every DHCP network of the device ...
+  exclude:                   # ... except these prefixes (and anything inside them)
+    - 192.168.88.0/24        # MikroTik factory default LAN, not ours
+# scope: {kind: resolver}    # the device's own resolver instead
+reason: "wave1: pilot router"
