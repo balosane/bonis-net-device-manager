@@ -13,7 +13,8 @@ Layout of the output (one play, localhost, connection: local):
       - debug: plan id
       - block (tags: [dev_<name>])            one per device, devices sorted by name (same order as plan.json)
           prechecks of change 1               reads + assert; a failing precheck must NOT trigger a rollback
-          - block: change 1 + its verify      verify tasks only run when `not netdev_check_only`
+                                              (airOS: a check_mode airos_cfg gate with the plan's base hash)
+          - block: change 1 + its verify      verify tasks only run when `not (netdev_check_only | bool)`
             rescue: rollback, then fail       rollback only for what this change group did, then stop
 
 Credentials come from the variables netdev_user / netdev_pass and are never rendered into the file."""
@@ -107,13 +108,15 @@ class _Ctx:
         self.n += 1
         return f"netdev_r_{self.index}_{self.n}"
 
-    def task(self, name: str, module: str, args: dict, *, register: str | None = None, verify: bool = False) -> dict:
+    def task(self, name: str, module: str, args: dict, *, register: str | None = None, verify: bool = False,
+             always_check: bool = False) -> dict:
         t: dict = {"name": f"{self.dev.device}: {_safe(name, 'task name')}", module: args}
         if register:
             t["register"] = register
-        t["check_mode"] = True if self.check_only else "{{ netdev_check_only | bool }}"
+        # always_check: a gate or verify step must never write, in any mode (literal true, not a variable)
+        t["check_mode"] = True if (self.check_only or always_check) else "{{ netdev_check_only | bool }}"
         if verify:
-            t["when"] = "not netdev_check_only"
+            t["when"] = "not (netdev_check_only | bool)"
         return t
 
     def conn(self) -> dict:
@@ -122,6 +125,19 @@ class _Ctx:
 
 def _assert(ctx: _Ctx, name: str, conditions: list[str], msg: str, verify: bool = False) -> dict:
     return ctx.task(name, M_ASSERT, {"that": conditions, "fail_msg": _safe(msg, "message"), "quiet": True}, verify=verify)
+
+
+def _render_airos_gate(ctx: _Ctx, command: str, purpose: str) -> list[dict]:
+    """The airOS precheck as a REAL gate: the change's own base hash and settings, always in check mode, placed OUTSIDE
+    the rescued block. A drifted device fails here, before anything is changed, so the rollback can never run."""
+    m = _AIROS_SET.match(command)
+    if not m:
+        raise RenderError(f"{ctx.dev.device}: no Ansible mapping for update {command!r}")
+    base, rest = m.groups()
+    settings = dict(kv.split("=", 1) for kv in rest.split())
+    return [ctx.task(f"gate: base hash of {purpose}", M_AIROS,
+                     {"host": ctx.host, "username": "{{ netdev_user }}", "password": "{{ netdev_pass }}",
+                      "base": base, "settings": _safe_map(settings), "state": "present"}, always_check=True)]
 
 
 def _kind(dev: DevicePlan) -> str:
@@ -177,8 +193,8 @@ def _render_read(ctx: _Ctx, step: Step, kind: str, verify: bool) -> list[dict]:
         if cmd != _AIROS_READ:
             raise RenderError(f"{d}: no Ansible mapping for read {cmd!r}")
         if what == "precheck":
-            # no read-only airOS module; the base hash is enforced by airos_cfg itself when it changes the file
-            return [ctx.task(f"{step.purpose} (base hash is enforced by bonis.netdev.airos_cfg)", M_DEBUG,
+            # informational only; with a change the real gate is rendered by _render_airos_gate (see _render_device)
+            return [ctx.task(f"{step.purpose} (no change follows; nothing to gate)", M_DEBUG,
                              {"msg": _safe(f"precheck: {step.expect or 'none'}", "message")})]
         settings = dict(kv.split("=", 1) for kv in _expect_value(step, r"((?:[a-z0-9_.]+=\S*)(?: [a-z0-9_.]+=\S*)*)", d).split())
         reg = ctx.var()
@@ -186,7 +202,8 @@ def _render_read(ctx: _Ctx, step: Step, kind: str, verify: bool) -> list[dict]:
             # re-apply the expected values against the current file: nothing may change
             ctx.task(f"{step.purpose}", M_AIROS,
                      {"host": ctx.host, "username": "{{ netdev_user }}", "password": "{{ netdev_pass }}",
-                      "base": "current", "settings": _safe_map(settings), "state": "present"}, register=reg, verify=True),
+                      "base": "current", "settings": _safe_map(settings), "state": "present"}, register=reg, verify=True,
+                     always_check=True),
             _assert(ctx, f"{step.purpose}: nothing left to change", [f"not {reg}.changed"],
                     f"{d}: airOS config does not hold the expected values", verify=True),
         ]
@@ -253,9 +270,13 @@ def _render_device(dev: DevicePlan, index: int, check_only: bool) -> dict | None
     body: list[dict] = []
     for pre, change, post in _groups(dev.steps):
         for s in pre:
+            if kind == "airos" and change is not None:
+                continue   # replaced by the gate below
             body += _render_read(ctx, s, kind, verify=False)
         if change is None:
             continue
+        if kind == "airos":
+            body += _render_airos_gate(ctx, change.command, change.purpose)
         inner = _render_update(ctx, change.command, change.purpose, kind, "change")
         for s in post:
             inner += _render_read(ctx, s, kind, verify=True)

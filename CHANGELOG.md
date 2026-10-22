@@ -11,6 +11,11 @@
   `verify_playbook(plan_json, text)` refuses tampered plans, non-allowlisted modules, missing `check_mode` and any drift from the plan.
 - CLI: `netdev render-playbook` (check-only by default) and `netdev verify-playbook`.
 
+- Review fixes: airOS precheck is a check_mode gate outside the rescued block (no rollback over a hand edit); airOS verify is
+  always `check_mode: true`; every condition uses `netdev_check_only | bool`; `airos_cfg` refuses secret-looking keys and
+  indented key lines; templates type-check region/site/role/names and reject undeclared device `params`; Dockerfile ships
+  `config/`, the collection, ansible-core and community.routeros; CI checks the collection and the renderer.
+
 ## 0.0.1 (prototype)
 - Intent `Dns` (DHCP networks with exclusions, or the device resolver).
 - Drivers `routeros` (6 and 7) and `airos`: read, plan. No writes.

@@ -84,6 +84,9 @@ def validate_settings(settings):
     for key, value in settings.items():
         if not isinstance(key, str) or not KEY_RX.match(key):
             raise AirosCfgError("invalid setting key %r (allowed: letters, digits, _ . -)" % (key,))
+        if SECRET_KEY_RX.search(key):
+            raise AirosCfgError("setting %s looks like a credential; such keys are refused because their values would "
+                                "leak through module_args and -v output" % key)
         if isinstance(value, bool) or not isinstance(value, (str, int)):
             raise AirosCfgError("value of %s must be a string (quote it in the playbook)" % key)
         value = str(value)
@@ -250,6 +253,12 @@ def run_module(params, check_mode, transport):
         touched = sorted(changes)
         result["diff"] = {"before": _render(touched, cfg),
                           "after": _render(touched, dict(cfg, **changes))}
+        col0 = set(cfg_parse("\n".join(l for l in text.splitlines() if l == l.lstrip())))
+        indented = sorted(k for k in changes if k in cfg and k not in col0)
+        if indented:
+            result.update(failed=True, msg="key(s) %s are present in the config with leading whitespace; the write "
+                          "command only matches lines starting at column 0, refusing a silent no-op" % ", ".join(indented))
+            return result
         if not changes:
             result["msg"] = "already in the requested state (%d keys checked)" % len(keys)
             return result

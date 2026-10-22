@@ -10,6 +10,8 @@ Sets keys in the flat config `/tmp/system.cfg` of a Ubiquiti airOS device.
 - Arguments: `host`, `username`, `password` (no_log), `port` (22), `base`, `settings` (key -> string), `state: present`.
 - `base` is the sha256 of `/tmp/system.cfg` the plan was built against (drift guard), or `current` for no guard.
 - Supports `check_mode` and `diff`; the diff holds only the touched keys, values of credential-like keys are masked.
+- `settings` keys that look like credentials (psk, password, secret, hash, token, `*key`, community) are refused: Ansible logs
+  `module_args` (`-v`), so the values would leak. A key whose existing line has leading whitespace is refused when it must change.
 - Returns `changed`, `msg`, `diff`, `base_sha256`. The whole config is never returned.
 - **Writes are disabled**: the code constant `WRITES_ENABLED` in `plugins/module_utils/airos_cfg.py` is `False` (fleet write ban).
   A non-check run that would change the device fails with a clear message. Enabling is a reviewed commit.

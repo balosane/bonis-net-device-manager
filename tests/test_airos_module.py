@@ -179,11 +179,15 @@ def test_verify_failure_deletes_new_keys_on_restore(writes_on):
 
 def test_secrets_never_in_results_or_diff():
     t = Fake()
+    # secret-looking keys are refused outright (their values would leak via module_args / -v), value never echoed
     r = lib.run_module(params(settings={"aaa.1.wpa.psk": "NewSecretPsk", "users.1.password": "x"}), True, t)
+    assert r["failed"] and "looks like a credential" in r["msg"] and t.cmds == []
     blob = repr(r)
     for s in ("NewSecretPsk", "SuperSecretPsk", "pw-SECRET", "$1$hash"):
         assert s not in blob
-    assert "<redacted>" in r["diff"]["after"]
+    # a normal change next to a stored secret never shows it
+    r = lib.run_module(params(settings={"resolv.nameserver.1.ip": "9.9.9.9"}), True, t)
+    assert "SuperSecretPsk" not in repr(r)
     r = lib.run_module(params(password="pw-SECRET", base="a" * 64), True, t)
     assert "pw-SECRET" not in repr(r)
 
@@ -281,3 +285,22 @@ def test_module_runs_in_ansible_harness_if_available(tmp_path):
         assert out["changed"] is True and out["base_sha256"] == SHA
     finally:
         sys.path.pop(0)
+
+
+@pytest.mark.parametrize("key", ["aaa.1.wpa.psk", "users.1.password", "snmp.community", "x.secret", "api.token", "sshd.hostkey"])
+def test_secret_looking_settings_keys_refused(key):
+    t = Fake()
+    r = lib.run_module(params(settings={key: "v4lue"}), True, t)
+    assert r["failed"] and "credential" in r["msg"] and "v4lue" not in repr(r) and t.cmds == []
+
+
+def test_indented_key_line_is_refused_not_silent_noop(writes_on):
+    text = CFG.rstrip("\n") + "\n  indented.val=old\n"
+    for check in (True, False):
+        t = Fake(text=text)
+        r = lib.run_module(params(settings={"indented.val": "new"}), check, t)
+        assert r["failed"] and "leading whitespace" in r["msg"] and "indented.val" in r["msg"]
+        assert t.cmds == [lib.READ_CFG]       # nothing written
+    # unchanged value on an indented line is not a change, so it is not an error
+    r = lib.run_module(params(settings={"indented.val": "old"}), True, Fake(text=text))
+    assert not r.get("failed") and r["changed"] is False

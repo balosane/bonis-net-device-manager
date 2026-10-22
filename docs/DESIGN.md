@@ -14,8 +14,9 @@ later be only the transport that runs an approved plan.
 3. **Plan** (`Driver.plan`): a pure function of (intent, what was read). Same input gives the same plan byte for byte.
 4. **Store**: `plan.json`. `plan_id` = sha256 of the canonical content; `created_at` is stored beside it, not in it.
 5. **Review/approve**: approval refers to the `plan_id`. `netdev check` recomputes it.
-6. **Execute** (not built): re-run the prechecks, run the changes one at a time, stop at the first failure, verify, report the
-   rollback for exactly what changed. No automatic rollback.
+6. **Execute**: done through the generated Ansible playbook (see "Ansible executor" below): prechecks re-run, changes one at a
+   time, stop at the first failure, verify. The rollback of a change group runs in a `rescue` only for a failure of the change
+   or its verify, never for a failed precheck/gate. Writes stay disabled fleet-wide (`WRITES_ENABLED = False`, check-only default).
 
 ## Decisions
 
@@ -65,8 +66,12 @@ later be only the transport that runs an approved plan.
   back (missing keys deleted) and the run fails. Keys `[A-Za-z0-9_.-]+`; values reject newline, CR, NUL, backtick, `;`, `$(`.
 - **Deny by default**: a `GuardedTransport` runs only `cat /tmp/system.cfg` and, with writes on, commands matching the generated write shapes.
   Check mode never reaches a write command even with the flag on.
-- **Not built**: the playbook renderer, a rollback run through the module (a rollback step is the same module with `base: current`),
-  atomic whole-file replace (the sed edits are in place; a power loss between edit and `cfgmtd` leaves /tmp, not flash, changed).
+- A rollback is the same module with `base: current` (rendered into the `rescue` of the change group).
+- Secret-looking keys (`SECRET_KEY_RX`: psk, passw, secret, hash, token, key$, community) are REFUSED in `settings`: Ansible
+  logs `module_args` (`-v`, callbacks), so their values would leak. A proper design (vault/no_log values) does not exist yet.
+- A key whose line in `system.cfg` has leading whitespace is refused when it must change: the write regex only matches column 0
+  and would otherwise be a silent no-op.
+- **Not built**: atomic whole-file replace (the sed edits are in place; a power loss between edit and `cfgmtd` leaves /tmp, not flash, changed).
 
 ## Ansible executor (BONISISP-41)
 
@@ -85,17 +90,22 @@ only the variables `netdev_user` / `netdev_pass`; the device address is the plan
 | `/ip dhcp-server network set [find address=P] dns-server=A,B` | `api_info` + `assert` that P exists (api_modify would create it), then `api_modify` with `data: [{address: P, dns-server: A,B}]` |
 | RouterOS precheck / verify (reads) | `api_info` + `assert` against `expect`; verify tasks carry `when: not netdev_check_only` |
 | `airos-cfg-set base=<sha256\|current> k=v ...` | `bonis.netdev.airos_cfg` (host, username, password, base, settings, state: present) |
-| airOS precheck | `debug` only: no read-only module exists; the `base` hash is enforced by `airos_cfg` on the change |
-| airOS verify | `airos_cfg` with `base: current` and the expected values, then `assert not changed` |
+| airOS precheck | a GATE: `airos_cfg` with the plan's `base` hash and target settings, literal `check_mode: true` (also in apply mode), placed in the device block BEFORE the rescued group |
+| airOS verify | `airos_cfg` with `base: current` and the expected values, literal `check_mode: true`, then `assert not changed` |
 | rollback | `rescue:` of the change group, followed by an `assert false` so the run stops |
 | anything else | `RenderError` (deny by default) |
 
-Each change forms an inner `block` (change + verify) with its own `rescue`, nested in the device block; prechecks stay outside it, so
-a failed precheck (someone edited the device by hand) never triggers a rollback that would overwrite that edit. Plan text containing
+Each change forms an inner `block` (change + verify) with its own `rescue`, nested in the device block; prechecks and the airOS
+gate stay outside it. A hand edit between plan and apply therefore fails the gate (base hash mismatch) or a RouterOS precheck
+assert BEFORE anything is changed, and no rollback runs that would overwrite the edit. (Inside the rescued block the module's own
+base-hash check is only a second line of defence; a failure there does trigger the rollback, which is why the gate comes first.)
+A hand edit made after the gate but during the run is not detected. Plan text containing
 Jinja syntax (`{{`, `{%`, `{#`) is refused because Ansible templates string arguments.
 
 **Check-only.** By default every task has `check_mode: true` and the play var `netdev_check_only: true`. `--apply-mode` renders
 `check_mode: "{{ netdev_check_only | bool }}"` with `netdev_check_only: false`; writes stay banned on the fleet until the owner lifts it.
+Every condition uses `netdev_check_only | bool`, and verify tasks run `when: not (netdev_check_only | bool)`. Pass the override as a
+JSON boolean, `-e '{"netdev_check_only": false}'`: `-e netdev_check_only=false` is a string, which only the `| bool` filter treats as false.
 
 **Verification** (`verify_playbook`, returns a list of violations): plan.json recomputes to its own plan_id; the playbook's
 `netdev_plan_id` equals it; every module is in `ALLOWLIST`; no task lacks `check_mode: true` in a check-only playbook; no extra

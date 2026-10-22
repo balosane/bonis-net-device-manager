@@ -23,9 +23,16 @@
     tags:
     - dev_DEMO_AP
     block:
-    - name: 'DEMO-AP: re-read system.cfg; its sha256 must still be the planned base (base hash is enforced by bonis.netdev.airos_cfg)'
-      ansible.builtin.debug:
-        msg: 'precheck: sha256:717eb3f63e40c7edc9e84d34c40382e05bfdbe84bc37e5aee1a0c6568a45a765'
+    - name: 'DEMO-AP: gate: base hash of resolv.nameserver.1.ip: 192.168.6.1 -> 192.168.238.119; resolv.nameserver.2.ip: (unset) -> 192.168.6.1'
+      bonis.netdev.airos_cfg:
+        host: 192.168.1.20
+        username: '{{ netdev_user }}'
+        password: '{{ netdev_pass }}'
+        base: 717eb3f63e40c7edc9e84d34c40382e05bfdbe84bc37e5aee1a0c6568a45a765
+        settings:
+          resolv.nameserver.1.ip: 192.168.238.119
+          resolv.nameserver.2.ip: 192.168.6.1
+        state: present
       check_mode: true
     - block:
       - name: 'DEMO-AP: change resolv.nameserver.1.ip: 192.168.6.1 -> 192.168.238.119; resolv.nameserver.2.ip: (unset) -> 192.168.6.1'
@@ -51,7 +58,7 @@
           state: present
         register: netdev_r_0_1
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       - name: 'DEMO-AP: system.cfg must hold the new values: nothing left to change'
         ansible.builtin.assert:
           that:
@@ -59,7 +66,7 @@
           fail_msg: 'DEMO-AP: airOS config does not hold the expected values'
           quiet: true
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       rescue:
       - name: 'DEMO-AP: rollback undo resolv.nameserver.1.ip: 192.168.6.1 -> 192.168.238.119; resolv.nameserver.2.ip: (unset) -> 192.168.6.1'
         bonis.netdev.airos_cfg:
@@ -141,7 +148,7 @@
           path: ip dhcp-server network
         register: netdev_r_1_3
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       - name: 'DEMO-ROUTER: 192.168.80.0/26: dns-server must be 192.168.238.119,192.168.6.1: value'
         ansible.builtin.assert:
           that:
@@ -149,7 +156,7 @@
           fail_msg: 'DEMO-ROUTER: DHCP network 192.168.80.0/26 does not have dns-server=192.168.238.119,192.168.6.1'
           quiet: true
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       rescue:
       - name: 'DEMO-ROUTER: rollback 192.168.80.0/26: read networks'
         community.routeros.api_info:
@@ -248,7 +255,7 @@
           path: ip dhcp-server network
         register: netdev_r_1_7
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       - name: 'DEMO-ROUTER: 10.15.5.208/29: dns-server must be 192.168.238.119,192.168.6.1: value'
         ansible.builtin.assert:
           that:
@@ -256,7 +263,7 @@
           fail_msg: 'DEMO-ROUTER: DHCP network 10.15.5.208/29 does not have dns-server=192.168.238.119,192.168.6.1'
           quiet: true
         check_mode: true
-        when: not netdev_check_only
+        when: not (netdev_check_only | bool)
       rescue:
       - name: 'DEMO-ROUTER: rollback 10.15.5.208/29: read networks'
         community.routeros.api_info:

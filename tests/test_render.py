@@ -80,7 +80,11 @@ def test_apply_mode_follows_variable():
     text = render_playbook(demo_plan(), check_only=False)
     play = yaml.safe_load(text)[0]
     assert play["vars"]["netdev_check_only"] is False
-    assert all(t["check_mode"] == "{{ netdev_check_only | bool }}" for t in flat(play["tasks"]) if "block" not in t)
+    leaves = [t for t in flat(play["tasks"]) if "block" not in t]
+    literal = [t for t in leaves if t["check_mode"] is True]
+    assert all(t["check_mode"] == "{{ netdev_check_only | bool }}" for t in leaves if t not in literal)
+    # only the airOS gate and verify tasks are pinned to check mode in apply mode
+    assert literal and all("bonis.netdev.airos_cfg" in t for t in literal)
 
 
 def test_resolver_mapping():
@@ -95,7 +99,7 @@ def test_resolver_mapping():
     assert len(infos) == 2 and all(i["community.routeros.api_info"]["path"] == "ip dns" for i in infos)
     asserts = find(text, "ansible.builtin.assert")
     assert any("'192.168.6.1,8.8.8.8'" in c for t in asserts for c in t["ansible.builtin.assert"]["that"])  # precheck
-    verify = [t for t in find(text, "ansible.builtin.assert") if t.get("when") == "not netdev_check_only"]
+    verify = [t for t in find(text, "ansible.builtin.assert") if t.get("when") == "not (netdev_check_only | bool)"]
     assert verify and "'1.1.1.1,8.8.8.8'" in verify[0]["ansible.builtin.assert"]["that"][0]
 
 
@@ -137,6 +141,89 @@ def test_rollback_in_rescue_and_precheck_outside():
     assert rb["base"] == "current" and rb["settings"] == {"resolv.nameserver.1.ip": "192.168.6.1"}
     # prechecks sit in the device block, outside any rescue-protected group
     assert "ansible.builtin.assert" in router["block"][1] or "community.routeros.api_info" in router["block"][0]
+
+
+def _ancestors(tasks, path=()):
+    """Yield (task, ancestor blocks) for every task, walking block/rescue/always."""
+    for t in tasks:
+        yield t, path
+        for k in ("block", "rescue", "always"):
+            if k in t:
+                yield from _ancestors(t[k], path + (t,))
+
+
+def test_airos_gate_is_a_real_check_mode_task_outside_every_rescue():
+    for check_only in (True, False):
+        text = render_playbook(demo_plan(), check_only=check_only)
+        gates = [(t, anc) for t, anc in _ancestors(tasks_of(text))
+                 if "bonis.netdev.airos_cfg" in t and t["name"].startswith("DEMO-AP: gate")]
+        assert len(gates) == 1
+        gate, anc = gates[0]
+        args = gate["bonis.netdev.airos_cfg"]
+        assert len(args["base"]) == 64 and args["settings"] == {"resolv.nameserver.1.ip": "192.168.238.119",
+                                                                "resolv.nameserver.2.ip": "192.168.6.1"}
+        assert gate["check_mode"] is True                  # literal, also in apply mode
+        # a drift failure of the gate cannot reach a rescue: no ancestor block has one
+        assert anc and not any("rescue" in a for a in anc)
+        # and it precedes the rescued group in the device block
+        dev = anc[-1]["block"]
+        group = next(t for t in dev if "rescue" in t)
+        assert dev.index(gate) < dev.index(group)
+        # the change itself is the same settings/base inside the rescued block
+        inner = group["block"][0]["bonis.netdev.airos_cfg"]
+        assert inner["base"] == args["base"] and inner["settings"] == args["settings"]
+        # no more debug-only airOS precheck
+        assert not any("ansible.builtin.debug" in t and "DEMO-AP" in t["name"] for t, _ in _ancestors(tasks_of(text)))
+
+
+def test_verify_rejects_playbook_without_the_gate():
+    plan = demo_plan()
+    text = render_playbook(plan)
+    play = yaml.safe_load(text)
+    ap = next(t for t in play[0]["tasks"] if t["name"].startswith("DEMO-AP"))
+    ap["block"] = [t for t in ap["block"] if not t.get("name", "").startswith("DEMO-AP: gate")]
+    assert verify_playbook(doc_of(plan), yaml.safe_dump(play), require_check_only=True)
+
+
+def test_airos_verify_is_always_literal_check_mode():
+    for check_only in (True, False):
+        tasks = tasks_of(render_playbook(demo_plan(), check_only=check_only))
+        ap = next(t for t in tasks if t["name"].startswith("DEMO-AP"))
+        group = next(t for t in ap["block"] if "rescue" in t)
+        i = next(i for i, t in enumerate(group["block"]) if "bonis.netdev.airos_cfg" in t and t["bonis.netdev.airos_cfg"]["base"] == "current")
+        verify, assrt = group["block"][i], group["block"][i + 1]
+        assert verify["check_mode"] is True
+        assert assrt["ansible.builtin.assert"]["that"] == [f"not {verify['register']}.changed"]
+        assert verify["when"] == assrt["when"] == "not (netdev_check_only | bool)"
+        # the change task itself still follows the variable in apply mode
+        change = group["block"][0]
+        assert change["check_mode"] == (True if check_only else "{{ netdev_check_only | bool }}")
+
+
+def test_check_only_conditions_use_bool_filter_everywhere():
+    import re
+    text = render_playbook(demo_plan(), check_only=False)
+    for t, _ in _ancestors(tasks_of(text)):
+        for key in ("when", "check_mode"):
+            v = t.get(key)
+            if isinstance(v, str):
+                assert re.sub(r"netdev_check_only \| bool", "", v).count("netdev_check_only") == 0, (t["name"], v)
+    assert any(t.get("when") for t, _ in _ancestors(tasks_of(text)))
+
+
+def test_conditions_evaluate_correctly_for_bool_and_string_values():
+    jinja2 = pytest.importorskip("jinja2")
+    env = jinja2.Environment()
+    env.filters["bool"] = lambda v: v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "on", "1")
+    tasks = list(_ancestors(tasks_of(render_playbook(demo_plan(), check_only=False))))
+    whens = [t["when"] for t, _ in tasks if "when" in t]
+    checks = [t["check_mode"] for t, _ in tasks if isinstance(t.get("check_mode"), str)]
+    assert whens and checks
+    for value, writing in ((False, True), ("false", True), ("False", True), (True, False), ("true", False)):
+        for w in whens:   # verify steps must run exactly when writes are on
+            assert env.compile_expression(w)(netdev_check_only=value) is writing, (w, value)
+        for c in checks:  # check_mode must be on exactly when check-only
+            assert env.from_string(c).render(netdev_check_only=value) == str(not writing), (c, value)
 
 
 def test_no_rollback_when_old_value_empty():

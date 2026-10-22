@@ -83,7 +83,9 @@ def load_vars(directory) -> dict[str, dict]:
         for name, params in doc.items():
             if not isinstance(params, dict):
                 raise ConfigError(f"{path}: {name}: expected a mapping of parameters")
-        out[layer] = {str(n): dict(p) for n, p in doc.items()}
+            if not isinstance(name, str):
+                raise ConfigError(f"{path}: name {name!r} must be a string (quote it)")
+        out[layer] = {n: dict(p) for n, p in doc.items()}
     return out
 
 
@@ -94,9 +96,14 @@ def load_devices(path, templates: dict, models: dict) -> dict[str, Device]:
         raise ConfigError(f"{path}: expected a mapping of device name to its settings")
     devices: dict[str, Device] = {}
     for name, d in doc.items():
+        if not isinstance(name, str):
+            raise ConfigError(f"{path}: device name {name!r} must be a string (quote it)")
         if not isinstance(d, dict):
             raise ConfigError(f"{path}: device {name}: expected a mapping")
         check_keys(path, d, {"model", "templates"}, {"site", "region", "role", "params"})
+        for k in ("region", "site", "role"):
+            if d.get(k) is not None and not isinstance(d[k], str):
+                raise ConfigError(f"{path}: device {name}: {k} must be a string, got {d[k]!r} (quote it)")
         if d["model"] not in models:
             raise ConfigError(f"{path}: device {name}: unknown model {d['model']!r}")
         tpls = string_list(path, f"device {name}: templates", d["templates"])
@@ -115,8 +122,15 @@ def load_config(directory, devices_file=None) -> Config:
     features = load_features(base / "features")
     models = load_models(base / "models")
     templates = load_templates(base / "templates", features)
-    return Config(features, models, templates, load_vars(base / "vars"),
-                  load_devices(devices_file or base / "devices.yml", templates, models))
+    path = devices_file or base / "devices.yml"
+    devices = load_devices(path, templates, models)
+    declared = {p.name for f in features.values() for p in f.params}
+    for dev in devices.values():
+        unknown = sorted(set(dev.params) - declared)
+        if unknown:
+            raise ConfigError(f"{path}: device {dev.name}: params {', '.join(map(repr, unknown))} not declared by any feature "
+                              f"(typo?)")
+    return Config(features, models, templates, load_vars(base / "vars"), devices)
 
 
 def layered_params(cfg: Config, dev: Device) -> dict:

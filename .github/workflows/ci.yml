@@ -16,3 +16,10 @@ jobs:
       - run: pip install . pytest
       - run: pytest -q
       - run: netdev --help
+      - name: Ansible collection and renderer syntax check
+        run: |
+          pip install ansible-core==2.17.14 librouteros
+          ansible-galaxy collection install community.routeros:==3.21.0 -p "$HOME/.ansible/collections"
+          export ANSIBLE_COLLECTIONS_PATH="$PWD/ansible/collections:$HOME/.ansible/collections"
+          ansible-doc -t module bonis.netdev.airos_cfg
+          pytest -q tests/test_render.py::test_ansible_syntax_check

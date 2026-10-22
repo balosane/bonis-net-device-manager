@@ -270,7 +270,7 @@ def _cmd_render_playbook(a) -> int:
         return 2
     if a.apply_mode:
         print("WARNING: apply mode. Writes on the fleet are banned until the owner lifts the ban; the playbook runs for real "
-              "only with netdev_check_only: false.", file=sys.stderr)
+              "only with -e '{\"netdev_check_only\": false}' (a JSON boolean).", file=sys.stderr)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
             f.write(text)

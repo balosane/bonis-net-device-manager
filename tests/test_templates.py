@@ -197,3 +197,26 @@ def test_cli_config_error_exits_1(tmp_path, capsys):
     (tmp_path / "c" / "templates" / "default.yml").write_text("x: [nope]\n")
     assert cli.main(["check-templates", "--config", str(tmp_path / "c")]) == 1
     assert "unknown feature tag nope" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("field,value", [("region", 7), ("site", ["s1"]), ("role", True)])
+def test_region_site_role_must_be_strings(conf, field, value):
+    d = {"d1": {**DEVICES["d1"], field: value}}
+    with pytest.raises(ConfigError, match=rf"{field} must be a string"):
+        load_config(conf(devices=d))
+
+
+def test_non_string_device_and_layer_names_rejected(conf):
+    with pytest.raises(ConfigError, match="device name 12 must be a string"):
+        load_config(conf(devices={12: {"model": "R", "templates": ["core"]}}))
+    with pytest.raises(ConfigError, match="name 5 must be a string"):
+        load_config(conf(vars_={**VARS, "site.yml": {5: {"primary": "10.0.0.3"}}}))
+
+
+def test_unknown_device_param_key_is_an_error_naming_it(conf):
+    d = {"d1": {**DEVICES["d1"], "params": {"primary": "10.0.0.9", "primry": "typo"}}}
+    with pytest.raises(ConfigError, match="'primry' not declared by any feature"):
+        load_config(conf(devices=d))
+    # a param declared by ANY feature (even one the device does not use) is accepted
+    d = {"d1": {**DEVICES["d1"], "params": {"servers": ["x.example"]}}}
+    assert load_config(conf(devices=d)).devices["d1"].params == {"servers": ["x.example"]}
