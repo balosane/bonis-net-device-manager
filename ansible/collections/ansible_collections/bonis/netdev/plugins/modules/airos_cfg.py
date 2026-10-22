@@ -13,7 +13,7 @@ description:
   - Reads C(/tmp/system.cfg) over SSH, compares the requested keys, and (only when writes are enabled in the module code)
     changes exactly those keys and persists with C(cfgmtd).
   - Guarded by a base hash (drift guard) so a plan made against one version of the config is never applied to another.
-  - Runs on the controller (use C(connection: local)); needs C(sshpass) and C(ssh). The whole config is never returned.
+  - "Runs on the controller (use C(connection: local)); needs C(sshpass) and C(ssh). The whole config is never returned."
   - B(Writes are disabled in this version) (code constant C(WRITES_ENABLED)); only check mode and no-op runs succeed.
 options:
   host:

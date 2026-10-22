@@ -244,6 +244,7 @@ def test_module_file_compiles_and_docs_valid(tmp_path):
     exec(compile(head, str(MOD_PATH), "exec"), ns)
     doc, ex, ret = (yaml.safe_load(ns[k]) for k in ("DOCUMENTATION", "EXAMPLES", "RETURN"))
     assert doc["module"] == "airos_cfg" and isinstance(ex, list) and {"changed", "msg", "base_sha256", "diff"} <= set(ret)
+    assert all(isinstance(d, str) for d in doc["description"])  # an unquoted 'a: b' item becomes a dict
     opts = doc["options"]
     assert set(opts) == set(lib.ARGUMENT_SPEC)
     for name, o in lib.ARGUMENT_SPEC.items():
