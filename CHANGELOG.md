@@ -4,6 +4,8 @@
 - NetBox inventory, phase 1, read-only (BONISISP-44): `netbox.py` (GET-only client), `inventory.py` (`devices_from_netbox`: tags
   `tpl-*` / `feat-*`), `reconcile.py` (`netdev reconcile [--json] [--emit DIR]`), model `aliases:` in the catalog, optional
   `Device.host`, `load_config(..., with_devices=False)`, `templates.format_matrix`. Tested against a fake NetBox only.
+  Only `active` devices are managed, region slug is used as-is, the vars-layer key check applies to NetBox devices, `--emit` refuses
+  when there are problems/invalid results, seed models for the real NetBox device types added.
 - Third review fix: `netdev run-playbook` (`render/runner.py`) is the only supported executor: single read + verify of the bytes,
   fresh empty temp dir with controller-owned `ansible.cfg`/`inventory.ini`, scrubbed environment, credentials via a 0600 vars file,
   always `--check --diff`, `RUN_APPLY_ENABLED = False`. `verify-playbook` warns (`--strict-dir` fails) on host_vars/, group_vars/,

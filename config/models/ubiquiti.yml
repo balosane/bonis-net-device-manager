@@ -10,3 +10,17 @@
 - model: Ubiquiti Rocket Prism 5AC
   os_family: airos
   capabilities: [wifi.5ghz.sta, wifi.5ghz.ap, dns.resolver, ntp.client]
+
+# Added for the real NetBox device types. Capabilities are CONSERVATIVE DEFAULTS, to be reviewed by the network owner.
+- model: Ubiquiti PowerBeam 5AC Gen2
+  aliases: [PowerBeam 5AC Gen2]
+  os_family: airos
+  capabilities: [wifi.5ghz.sta, wifi.5ghz.ap, dns.resolver, ntp.client]
+- model: Ubiquiti PowerBeam 5AC 300
+  aliases: [PowerBeam 5AC 300]
+  os_family: airos
+  capabilities: [wifi.5ghz.sta, wifi.5ghz.ap, dns.resolver, ntp.client]
+- model: Ubiquiti PowerBox Pro
+  aliases: [PowerBox Pro]
+  os_family: airos
+  capabilities: [wifi.5ghz.sta, wifi.5ghz.ap, dns.resolver, ntp.client]

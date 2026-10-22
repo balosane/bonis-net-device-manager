@@ -49,6 +49,10 @@ def devices_from_netbox(client, catalog, *, template_prefix: str = "tpl-", featu
         if not tpl_tags and not feat_tags:
             res.unmanaged.append((name, f"no {template_prefix}/{feature_prefix} tag"))
             continue
+        status = (d.get("status") or {}).get("value")
+        if status not in (None, "active"):
+            res.unmanaged.append((name, f"status {status}"))
+            continue
         if name in seen:
             res.problems.append((name, "duplicate device name in NetBox"))
             continue
@@ -93,8 +97,7 @@ def devices_from_netbox(client, catalog, *, template_prefix: str = "tpl-", featu
         site = d.get("site") or {}
         region = None
         if site.get("id") is not None:
-            r = (client.get_site(site["id"]).get("region") or {}).get("slug")
-            region = r.upper() if r else None
+            region = (client.get_site(site["id"]).get("region") or {}).get("slug") or None   # as-is, lower-case
         templates = sorted(set(tpl_tags))
         for f in sorted(set(feat_tags)):
             syn = SYNTHETIC_PREFIX + f

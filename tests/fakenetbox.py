@@ -13,12 +13,12 @@ DEVICE_TYPES = {
     1: {"id": 1, "model": "hEX S", "manufacturer": MIK},
     2: {"id": 2, "model": "LHG 5", "manufacturer": UBNT},
     3: {"id": 3, "model": "NanoStation 5AC Loco", "manufacturer": UBNT},
-    4: {"id": 4, "model": "RB951G-2HnD", "manufacturer": MIK},
+    4: {"id": 4, "model": "RB2011UiAS", "manufacturer": MIK},
     5: {"id": 5, "model": "Generic switch", "manufacturer": GEN},
 }
 SITES = {
-    1: {"id": 1, "name": "Site A", "slug": "site-a", "region": {"slug": "cz-east"}},
-    2: {"id": 2, "name": "Site B", "slug": "site-b", "region": None},
+    1: {"id": 1, "name": "site-a", "slug": "site-a", "region": {"slug": "cz-east"}},
+    2: {"id": 2, "name": "site-b", "slug": "site-b", "region": None},
 }
 
 

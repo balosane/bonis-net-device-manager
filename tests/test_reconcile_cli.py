@@ -159,3 +159,36 @@ def test_reconcile_never_runs_plan(monkeypatch):
     monkeypatch.setattr(cli, "SshReadTransport", lambda *a, **k: pytest.fail("no device access"))
     with FakeNetBox(clean_devices()) as srv:
         assert cli.main(args(srv)) == 0
+
+
+def test_offline_tagged_device_listed_and_counted(capsys):
+    off = dev(9, "off-1", 1, ["tpl-core-router"])
+    off["status"] = {"value": "offline"}
+    with FakeNetBox(clean_devices() + [off]) as srv:
+        assert cli.main(args(srv)) == 0
+    out = capsys.readouterr().out
+    assert "UNMANAGED  off-1: carries a template/feature tag but status offline" in out
+    assert "3 managed, 0 with problems, 2 unmanaged" in out
+
+
+def test_missing_vars_key_is_problem_naming_key(capsys):
+    d = dev(1, "x", 1, ["tpl-core-router"], role="newrole")
+    with FakeNetBox([d]) as srv:
+        assert cli.main(args(srv)) == 1
+    assert "PROBLEM  x: role 'newrole' is not a key of vars/role.yml" in capsys.readouterr().out
+
+
+def test_missing_region_key_is_problem(tmp_path, capsys):
+    shutil.copytree(SEED, tmp_path / "c")
+    (tmp_path / "c" / "vars" / "region.yml").write_text("other: {}\n")
+    with FakeNetBox([dev(1, "x", 1, ["tpl-core-router"])]) as srv:
+        assert cli.main(["reconcile", "--netbox", srv.url, "--token-env", "NB_TEST_TOKEN", "--config", str(tmp_path / "c")]) == 1
+    assert "region 'cz-east' is not a key of vars/region.yml" in capsys.readouterr().out
+
+
+def test_emit_refused_when_problems(tmp_path, capsys):
+    out = tmp_path / "e"
+    with FakeNetBox(clean_devices() + [dev(9, "bad", 1, ["tpl-core-router"], ip=None)]) as srv:
+        assert cli.main(args(srv, "--emit", str(out))) == 1
+    assert not out.exists()
+    assert "--emit refused" in capsys.readouterr().err

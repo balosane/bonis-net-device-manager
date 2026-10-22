@@ -25,6 +25,13 @@ The inventory can come from NetBox. A tag on a NetBox device selects what git co
   unknown template/feature, or it is a placeholder (`placeholder` tag, manufacturer `Generic`, model `Generic ...`).
 - Model match: `<manufacturer> <model>` (e.g. `MikroTik hEX S`), then `<model>` alone, then the optional `aliases:` list of a
   model in `models/*.yml` (an alias may not belong to two models).
-- Layers: region = NetBox site region slug upper-cased (`cz-east` -> `CZ-EAST`; none if the site has no region), site = site
-  name, role = role slug. The management address (`host`) is `primary_ip4` without the prefix length. Note that
-  `vars/region.yml` keys must therefore be upper-case for NetBox devices (the demo `devices.yml` uses lower-case).
+- Only devices with NetBox status `active` are managed; a tagged device with another status is listed as unmanaged
+  (`status <value>`).
+- Layers: region = NetBox site region slug as-is (lower-case, e.g. `mor`; none if the site has no region), site = site
+  name, role = role slug. The management address (`host`) is `primary_ip4` without the prefix length.
+- The strict layer check applies: if `vars/region.yml`, `site.yml` or `role.yml` exists, every region/site/role a NetBox device
+  uses must be a key of it (an empty entry `name: {}` is fine). Otherwise the device is a problem naming the missing key. So
+  every NetBox site name and role slug in use needs an entry.
+- `--emit` writes nothing when there is any problem or `invalid` result.
+- The seed model entries for the real NetBox device types (hEX, hEX PoE lite, RB951G-2HnD, RB433AH, CRS326, CCR1016, LHG 60G,
+  PowerBeam, PowerBox Pro) carry conservative default capabilities, to be reviewed by the network owner.

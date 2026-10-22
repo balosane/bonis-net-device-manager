@@ -31,7 +31,7 @@ def test_device_fields():
     d = {x.name: x for x in inv.devices}
     core = d["core-1"]
     assert (core.model, core.templates, core.region, core.site, core.role, core.host) == (
-        "MikroTik hEX S", ("tpl-core-router"[4:],), "CZ-EAST", "Site A", "router", "10.0.0.1")   # prefix length dropped
+        "MikroTik hEX S", ("tpl-core-router"[4:],), "cz-east", "site-a", "router", "10.0.0.1")   # prefix length dropped
     assert d["radio-1"].region is None and d["radio-1"].model == "Ubiquiti LHG-5"          # alias, site without region
     assert d["feat-1"].templates == ("feature:dns-standard",)
     assert d["ap-1"].model == "Ubiquiti NanoStation 5AC Loco" and d["ap-1"].params == {}
@@ -41,7 +41,7 @@ def test_device_fields():
 def test_problem_reasons():
     inv, _ = run()
     p = dict(inv.problems)
-    assert "unknown model MikroTik / RB951G-2HnD" in p["unknown-model"]
+    assert "unknown model MikroTik / RB2011UiAS" in p["unknown-model"]
     assert p["no-ip"] == "no primary_ip4"
     assert "unknown template tag tpl-nope" in p["bad-tags"] and "unknown feature tag feat-nope" in p["bad-tags"]
     assert "placeholder/Generic" in p["generic-sw"] and "unknown model" not in p["generic-sw"]
@@ -83,7 +83,7 @@ def test_catalog_aliases():
     assert find_model(models, "MikroTik", "hEX S").model == "MikroTik hEX S"
     assert find_model(models, None, "LHG 5").model == "Ubiquiti LHG-5"
     assert find_model(models, "Ubiquiti", "NS-5AC-Loco").model == "Ubiquiti NanoStation 5AC Loco"
-    assert find_model(models, "MikroTik", "hEX") is None
+    assert find_model(models, "MikroTik", "hEX Lite") is None
 
 
 def test_alias_conflict_is_config_error(tmp_path):
@@ -100,3 +100,26 @@ def test_alias_conflict_is_config_error(tmp_path):
 def test_device_constructor_compatible():
     from bonis_netdev.templates import Device
     assert Device("a", "m", ("t",)).host is None
+
+
+def test_only_active_devices_managed():
+    off = dev(1, "off", 1, ["tpl-core-router"])
+    off["status"] = {"value": "offline"}
+    inv, _ = run([off, dev(2, "on", 1, ["tpl-core-router"]), dev(3, "bare", 1, [])])
+    assert [d.name for d in inv.devices] == ["on"]
+    assert ("off", "status offline") in inv.unmanaged and inv.problems == []
+
+
+def test_region_slug_kept_lowercase():
+    inv, _ = run([dev(1, "x", 1, ["tpl-core-router"])])
+    assert inv.devices[0].region == "cz-east"
+
+
+def test_seed_real_netbox_models_present():
+    models = load_models(SEED / "models")
+    for nb_mfr, nb_model, cap in (("MikroTik", "hEX", "dns.resolver"), ("MikroTik", "hEX PoE lite", "dns.resolver"),
+                                  ("MikroTik", "RB951G-2HnD", "wifi.2ghz.ap"), ("MikroTik", "RB433AH", "dns.resolver"),
+                                  ("MikroTik", "CRS326-24G-2S+RM", "ntp.client"), ("MikroTik", "CCR1016-12S-1S+", "routing.ospf"),
+                                  ("MikroTik", "LHG 60G", "wifi.60ghz.ap"), ("Ubiquiti", "PowerBeam 5AC Gen2", "wifi.5ghz.ap"),
+                                  ("Ubiquiti", "PowerBeam 5AC 300", "wifi.5ghz.sta"), ("Ubiquiti", "PowerBox Pro", "dns.resolver")):
+        assert cap in find_model(models, nb_mfr, nb_model).capabilities

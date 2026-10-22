@@ -83,6 +83,12 @@ def reconcile(client, config_dir):
     results: list[Result] = []
     ok_devices = []
     for dev in inv.devices:
+        missing = [f"{layer} {value!r} is not a key of vars/{layer}.yml"
+                   for layer, value in (("region", dev.region), ("site", dev.site), ("role", dev.role))
+                   if value is not None and (Path(config_dir) / "vars" / f"{layer}.yml").exists() and value not in cfg.vars[layer]]
+        if missing:
+            inv.problems.append((dev.name, "; ".join(missing) + " (add it, possibly as an empty entry `name: {}`)"))
+            continue
         try:
             results += compile_device(cfg, dev)
             ok_devices.append(dev)
@@ -112,13 +118,19 @@ def cmd_reconcile(a) -> int:
         print(format_matrix(results))
         for n, r in inv.problems:
             print(f"PROBLEM  {n}: {r}")
-        print(f"{len(inv.devices)} managed, {len(inv.problems)} with problems, {len(inv.unmanaged)} unmanaged (no tag)")
+        for n, r in inv.unmanaged:
+            if r.startswith("status "):
+                print(f"UNMANAGED  {n}: carries a template/feature tag but {r}")
+        print(f"{len(inv.devices)} managed, {len(inv.problems)} with problems, {len(inv.unmanaged)} unmanaged (no tag or not active)")
+    if a.emit and bad:
+        print("error: --emit refused: there are problems or invalid results; nothing was written", file=sys.stderr)
+        return 1
     if a.emit:
         try:
             files = write_emit(Path(a.emit), groups)
         except (NetBoxError, OSError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        print(f"emitted to {a.emit}: {', '.join(files)}" + ("  (WARNING: result is not clean)" if bad else ""),
+        print(f"emitted to {a.emit}: {', '.join(files)}",
               file=sys.stderr if a.json else sys.stdout)
     return 1 if bad else 0
