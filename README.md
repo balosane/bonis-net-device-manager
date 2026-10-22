@@ -69,6 +69,24 @@ For airOS the running config is the flat file `/tmp/system.cfg`. The plan never 
 PSK and password hashes). It holds `airos-cfg-set base=<sha256 of the file> key=value ...`: an executor must re-read the file,
 refuse if the hash differs, replace exactly those keys in the whole file, and write the whole file back. A partial file is never written.
 
+## Ansible executor
+
+Ansible is the primary executor; our own Python modules are the fallback where no Ansible module exists. The playbook is a
+generated artefact, never hand-written, and it carries the `plan_id`:
+
+```bash
+netdev render-playbook plan.json --out playbook.yml     # check-only: every task has check_mode: true
+netdev verify-playbook plan.json playbook.yml           # exit 0 ok, 1 violations (printed); run it before every run
+```
+
+Approval is a git MR containing `plan.json` + `playbook.yml`. The controller must run `verify-playbook` and refuse on any
+violation: the playbook's `netdev_plan_id` must equal the recomputed plan id, `plan.json` must not be edited, only allowlisted
+modules may be used (`community.routeros.api_info`, `community.routeros.api_modify`, `bonis.netdev.airos_cfg`, and
+`ansible.builtin.debug|assert|set_fact`), and the tasks must equal the playbook re-rendered from the plan. Credentials come
+from the variables `netdev_user` / `netdev_pass`, never from the file. `--apply-mode` renders without forcing `check_mode`
+(it follows `netdev_check_only`, rendered as `false`) and prints a warning: writes on the fleet stay banned until the owner
+lifts the ban. Details: [docs/DESIGN.md](docs/DESIGN.md#ansible-executor-bonisisp-41).
+
 ## Safety rules built in
 
 - Every command is classified (`read` / `update`); an unclassified one is refused (deny by default), including anything with `;`,
@@ -85,7 +103,8 @@ bonis_netdev/drivers/       base, routeros, airos
 bonis_netdev/classify.py    what a command does; deny by default
 bonis_netdev/plan.py        Step, DevicePlan, Plan (plan_id, JSON, summary)
 bonis_netdev/transport.py   read-only SSH transport, fake transport for tests
-bonis_netdev/cli.py         netdev plan | show | check
+bonis_netdev/render/        plan -> Ansible playbook, playbook verification
+bonis_netdev/cli.py         netdev plan | show | check | render-playbook | verify-playbook
 docs/DESIGN.md              design, decisions, what is not built yet
 ```
 

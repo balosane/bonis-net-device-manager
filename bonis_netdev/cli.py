@@ -238,6 +238,40 @@ def cmd_selftest(a) -> int:
     return 0 if all(results) else 1
 
 
+def _cmd_render_playbook(a) -> int:
+    from .render import RenderError, plan_from_dict, plan_id_of, render_playbook
+    doc = _load_plan(a.plan)
+    if plan_id_of(doc) != doc.get("plan_id"):
+        print("error: plan_id does not match content (plan was modified); refusing to render", file=sys.stderr)
+        return 2
+    try:
+        text = render_playbook(plan_from_dict(doc), check_only=not a.apply_mode)
+    except (RenderError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    if a.apply_mode:
+        print("WARNING: apply mode. Writes on the fleet are banned until the owner lifts the ban; the playbook runs for real "
+              "only with netdev_check_only: false.", file=sys.stderr)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"written {a.out}  plan_id={doc['plan_id']}", file=sys.stderr)
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+def _cmd_verify_playbook(a) -> int:
+    from .render import verify_playbook
+    with open(a.playbook, encoding="utf-8") as f:
+        violations = verify_playbook(_load_plan(a.plan), f.read(), require_check_only=a.require_check_only)
+    for line in violations:
+        print(f"VIOLATION: {line}")
+    if not violations:
+        print("OK playbook matches the plan")
+    return 1 if violations else 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="netdev", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -272,6 +306,16 @@ def main(argv=None) -> int:
     p = sub.add_parser("check", help="verify the plan_id against the content")
     p.add_argument("plan")
     p.set_defaults(fn=cmd_check)
+    p = sub.add_parser("render-playbook", help="render a stored plan as an Ansible playbook (check-only by default)")
+    p.add_argument("plan")
+    p.add_argument("--out")
+    p.add_argument("--apply-mode", action="store_true", help="do not force check_mode (writes are still banned on the fleet)")
+    p.set_defaults(fn=_cmd_render_playbook)
+    p = sub.add_parser("verify-playbook", help="refuse a playbook that is not exactly the plan (exit 1 on violations)")
+    p.add_argument("plan")
+    p.add_argument("playbook")
+    p.add_argument("--require-check-only", action="store_true")
+    p.set_defaults(fn=_cmd_verify_playbook)
     a = ap.parse_args(argv)
     try:
         return a.fn(a)

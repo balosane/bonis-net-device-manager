@@ -38,3 +38,41 @@ later be only the transport that runs an approved plan.
 - RouterOS output is parsed from `print detail`; tested on canned output and on a 21-router snapshot of the real fleet.
 - The credential list is tried in order (the fleet has several inherited passwords). Per-device overrides are not implemented.
 - No LICENSE file yet; the owner has to choose one before the repo is shared outside the company.
+
+## Ansible executor (BONISISP-41)
+
+Decision with the owner: Ansible is the PRIMARY executor; our own Python modules are the fallback where no Ansible module exists.
+The playbook is generated from a stored plan (`bonis_netdev/render/ansible.py`), never hand-written. Approval is a git MR
+containing `plan.json` + `playbook.yml`; the controller runs `verify_playbook` and refuses the run on any violation.
+
+**Rendering.** One play, `hosts: localhost`, `connection: local`; one `block` per device in canonical plan order (sorted by device
+name, the order of `plan.json`), tagged `dev_<name>`. Play vars: `netdev_plan_id`, `netdev_check_only`, `netdev_waves` (a single
+wave listing all device tags; informational, pick a wave with `--tags`), `netdev_api_tls`, `netdev_validate_certs`. Credentials are
+only the variables `netdev_user` / `netdev_pass`; the device address is the plan's `host`.
+
+| plan step | task |
+|---|---|
+| `/ip dns set servers=A,B` | `community.routeros.api_modify` path `ip dns`, `handle_absent_entries/handle_entries_content: ignore` |
+| `/ip dhcp-server network set [find address=P] dns-server=A,B` | `api_info` + `assert` that P exists (api_modify would create it), then `api_modify` with `data: [{address: P, dns-server: A,B}]` |
+| RouterOS precheck / verify (reads) | `api_info` + `assert` against `expect`; verify tasks carry `when: not netdev_check_only` |
+| `airos-cfg-set base=<sha256\|current> k=v ...` | `bonis.netdev.airos_cfg` (host, username, password, base, settings, state: present) |
+| airOS precheck | `debug` only: no read-only module exists; the `base` hash is enforced by `airos_cfg` on the change |
+| airOS verify | `airos_cfg` with `base: current` and the expected values, then `assert not changed` |
+| rollback | `rescue:` of the change group, followed by an `assert false` so the run stops |
+| anything else | `RenderError` (deny by default) |
+
+Each change forms an inner `block` (change + verify) with its own `rescue`, nested in the device block; prechecks stay outside it, so
+a failed precheck (someone edited the device by hand) never triggers a rollback that would overwrite that edit. Plan text containing
+Jinja syntax (`{{`, `{%`, `{#`) is refused because Ansible templates string arguments.
+
+**Check-only.** By default every task has `check_mode: true` and the play var `netdev_check_only: true`. `--apply-mode` renders
+`check_mode: "{{ netdev_check_only | bool }}"` with `netdev_check_only: false`; writes stay banned on the fleet until the owner lifts it.
+
+**Verification** (`verify_playbook`, returns a list of violations): plan.json recomputes to its own plan_id; the playbook's
+`netdev_plan_id` equals it; every module is in `ALLOWLIST`; no task lacks `check_mode: true` in a check-only playbook; no extra
+play keys (roles, pre_tasks, imports ...); the whole play equals the playbook re-rendered from the plan. The last check makes the
+others redundant, but they give clear messages.
+
+**Contract for `bonis.netdev.airos_cfg`** (implemented elsewhere): args `host`, `username`, `password` (no_log), `base`
+(64-hex sha256 of `/tmp/system.cfg` or `current`), `settings` (dict key -> str), `state: present`; supports check mode; returns
+`changed` and `diff`. It must fail when `base` is a hash and the file no longer matches.
