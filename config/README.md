@@ -12,3 +12,19 @@
   `ConfigError` naming the file, the layer and the key.
 - If `vars/region.yml`, `site.yml` or `role.yml` exists, every region/site/role a device names must be a key of it (use `name: {}`
   for "no overrides"). A device that leaves the field unset, or a layer whose file does not exist, is not checked.
+
+## NetBox tags (`netdev reconcile`)
+
+The inventory can come from NetBox. A tag on a NetBox device selects what git config applies (desired state only):
+
+- `tpl-<template>` selects the template `<template>` from `templates/` (`tpl-core-router` -> `core-router`).
+- `feat-<feature>` adds the single feature `<feature>` from `features/` (`feat-dns-standard`).
+- Only devices with at least one such tag are managed; other devices are ignored (only counted). Other tags (`src-network-yml`,
+  `needs-review`, ...) are not ours.
+- A device is a **problem** (hard error, exit 1) if: its model is not in the catalog, it has no `primary_ip4`, a tag names an
+  unknown template/feature, or it is a placeholder (`placeholder` tag, manufacturer `Generic`, model `Generic ...`).
+- Model match: `<manufacturer> <model>` (e.g. `MikroTik hEX S`), then `<model>` alone, then the optional `aliases:` list of a
+  model in `models/*.yml` (an alias may not belong to two models).
+- Layers: region = NetBox site region slug upper-cased (`cz-east` -> `CZ-EAST`; none if the site has no region), site = site
+  name, role = role slug. The management address (`host`) is `primary_ip4` without the prefix length. Note that
+  `vars/region.yml` keys must therefore be upper-case for NetBox devices (the demo `devices.yml` uses lower-case).
