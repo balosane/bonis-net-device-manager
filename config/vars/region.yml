@@ -1,0 +1,2 @@
+cz-east:
+  servers: [ntp1.example.net, ntp2.example.net]

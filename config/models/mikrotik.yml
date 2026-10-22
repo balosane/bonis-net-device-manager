@@ -1,0 +1,13 @@
+# Capabilities are maintained here for now; they will be read from NetBox device types later.
+- model: MikroTik hEX S
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik RB4011
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik RB750Gr3
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik RB962UiGS-5HacT2HnT
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client, wifi.2ghz.ap, wifi.5ghz.ap]

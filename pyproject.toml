@@ -1,0 +1,15 @@
+[project]
+name = "bonis-net-device-manager"
+version = "0.0.1"
+description = "Intent -> driver -> stored plan for network devices (MikroTik RouterOS, Ubiquiti airOS). Prototype: plan only, no writes."
+requires-python = ">=3.10"
+dependencies = ["pyyaml"]
+
+[project.scripts]
+netdev = "bonis_netdev.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["bonis_netdev*"]

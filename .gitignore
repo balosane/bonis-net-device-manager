@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local secrets and generated plans
+credentials.yml
+*.secrets.yml
+plan*.json

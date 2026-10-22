@@ -1,0 +1,5 @@
+# Layers, later wins: global < region < site < role < device < the device's own `params`.
+primary: 192.168.238.119
+secondary: 192.168.6.1
+scope: resolver
+servers: [pool.ntp.org]

@@ -1,0 +1,26 @@
+# A valid inventory: `netdev check-templates --devices config/devices.example.yml` exits 0.
+rt-site-a-1:
+  model: MikroTik RB4011
+  region: cz-east
+  site: site-a
+  role: router
+  templates: [core-router]
+ptp-site-a-1:
+  model: Ubiquiti LHG-5
+  region: cz-east
+  site: site-a
+  role: ptp
+  templates: [ptp-radio]
+ap-site-a-1:
+  model: Ubiquiti Rocket Prism 5AC
+  region: cz-east
+  site: site-a
+  role: ap
+  templates: [ap-5g]
+rt-site-a-2:
+  model: MikroTik RB962UiGS-5HacT2HnT
+  region: cz-east
+  site: site-a
+  role: router
+  templates: [core-router, ap-5g]
+  params: {secondary: 192.168.6.9}

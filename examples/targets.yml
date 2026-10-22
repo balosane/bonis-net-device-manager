@@ -1,0 +1,2 @@
+targets:
+  - {name: MOR-ZAH-RT-1, host: 10.0.0.23}

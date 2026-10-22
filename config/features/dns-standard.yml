@@ -1,0 +1,10 @@
+name: dns-standard
+domain: dns
+requires: [dns.resolver]
+params:
+  primary: ip
+  secondary: ip?
+  extra: list?
+  scope: str?          # resolver (default) | dhcp-networks
+  exclude: list?       # prefixes left alone with scope dhcp-networks
+intent: dns

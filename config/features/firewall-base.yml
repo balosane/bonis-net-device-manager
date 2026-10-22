@@ -1,0 +1,4 @@
+name: firewall-base
+domain: firewall
+requires: [firewall]
+intent: firewall
