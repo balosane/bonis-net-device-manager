@@ -6,6 +6,9 @@
   `Device.host`, `load_config(..., with_devices=False)`, `templates.format_matrix`. Tested against a fake NetBox only.
   Only `active` devices are managed, region slug is used as-is, the vars-layer key check applies to NetBox devices, `--emit` refuses
   when there are problems/invalid results, seed models for the real NetBox device types added.
+  Review fixes: `next` links and every request target are pinned to the configured host (no token leak), token/host header validated
+  and never echoed, list responses validated (count, size, page cap, repeated `next`), IPv4-only `primary_ip4`, status exactly `active`,
+  `--emit` refuses symlinks and creates files with O_EXCL|O_NOFOLLOW.
 - Third review fix: `netdev run-playbook` (`render/runner.py`) is the only supported executor: single read + verify of the bytes,
   fresh empty temp dir with controller-owned `ansible.cfg`/`inventory.ini`, scrubbed environment, credentials via a 0600 vars file,
   always `--check --diff`, `RUN_APPLY_ENABLED = False`. `verify-playbook` warns (`--strict-dir` fails) on host_vars/, group_vars/,

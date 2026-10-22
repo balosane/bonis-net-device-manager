@@ -75,7 +75,7 @@ def test_invalid_ip_and_duplicate_and_nameless():
     inv, _ = run([bad, dev(2, "dup", 1, ["tpl-core-router"]), dev(3, "dup", 1, ["tpl-core-router"]),
                   {**dev(4, "x", 1, ["tpl-core-router"]), "name": None}])
     p = dict(inv.problems)
-    assert "not an address" in p["badip"] and p["dup"] == "duplicate device name in NetBox" and "(id 4)" in p
+    assert "not an IPv4 address" in p["badip"] and p["dup"] == "duplicate device name in NetBox" and "(id 4)" in p
 
 
 def test_catalog_aliases():
@@ -123,3 +123,19 @@ def test_seed_real_netbox_models_present():
                                   ("MikroTik", "LHG 60G", "wifi.60ghz.ap"), ("Ubiquiti", "PowerBeam 5AC Gen2", "wifi.5ghz.ap"),
                                   ("Ubiquiti", "PowerBeam 5AC 300", "wifi.5ghz.sta"), ("Ubiquiti", "PowerBox Pro", "dns.resolver")):
         assert cap in find_model(models, nb_mfr, nb_model).capabilities
+
+
+def test_status_must_be_exactly_active():
+    a = dev(1, "nostat", 1, ["tpl-core-router"])
+    del a["status"]
+    b = dev(2, "nullstat", 1, ["tpl-core-router"])
+    b["status"] = None
+    c = dev(3, "staged", 1, ["tpl-core-router"])
+    c["status"] = {"value": "staged"}
+    inv, _ = run([a, b, c])
+    assert inv.devices == [] and dict(inv.unmanaged) == {"nostat": "no status", "nullstat": "no status", "staged": "status staged"}
+
+
+def test_ipv6_primary_ip4_is_problem():
+    inv, _ = run([dev(1, "v6", 1, ["tpl-core-router"], ip="2001:db8::%d/64")])
+    assert "not an IPv4 address" in dict(inv.problems)["v6"]

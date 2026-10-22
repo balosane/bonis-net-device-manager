@@ -49,9 +49,10 @@ def devices_from_netbox(client, catalog, *, template_prefix: str = "tpl-", featu
         if not tpl_tags and not feat_tags:
             res.unmanaged.append((name, f"no {template_prefix}/{feature_prefix} tag"))
             continue
-        status = (d.get("status") or {}).get("value")
-        if status not in (None, "active"):
-            res.unmanaged.append((name, f"status {status}"))
+        st = d.get("status")
+        status = st.get("value") if isinstance(st, dict) else st
+        if status != "active":
+            res.unmanaged.append((name, f"status {status}" if status else "no status"))
             continue
         if name in seen:
             res.problems.append((name, "duplicate device name in NetBox"))
@@ -80,9 +81,12 @@ def devices_from_netbox(client, catalog, *, template_prefix: str = "tpl-", featu
             why.append("no primary_ip4")
         else:
             try:
-                host = str(ipaddress.ip_interface(ip4).ip)
+                iface = ipaddress.ip_interface(ip4)
+                if iface.version != 4:
+                    raise ValueError
+                host = str(iface.ip)
             except ValueError:
-                why.append(f"primary_ip4 {ip4!r} is not an address")
+                why.append(f"primary_ip4 {ip4!r} is not an IPv4 address")
 
         for t in tpl_tags:
             if t not in catalog.templates:

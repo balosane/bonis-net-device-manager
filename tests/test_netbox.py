@@ -111,3 +111,144 @@ def test_from_env(monkeypatch):
         NetBoxClient.from_env("http://x", "NB_T")
     monkeypatch.setenv("NB_T", "abc")
     assert NetBoxClient.from_env("http://x", "NB_T", token_kind="token")
+
+
+# ---- review fixes -------------------------------------------------------------------------------------------------------
+
+import io
+import json
+import traceback
+
+
+class Resp:
+    def __init__(self, doc, raw=None):
+        self.b = raw if raw is not None else json.dumps(doc).encode()
+
+    def read(self, n=-1):
+        return self.b if n < 0 else self.b[:n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def stub(*docs):
+    """opener returning the given documents in order; records requests."""
+    calls = []
+    it = iter(docs)
+
+    def opener(req, timeout=None):
+        calls.append(req)
+        d = next(it)
+        return d if isinstance(d, Resp) else Resp(d)
+    opener.calls = calls
+    return opener
+
+
+def page(results, nxt=None, count=None):
+    return {"count": len(results) if count is None else count, "next": nxt, "results": results}
+
+
+@pytest.mark.parametrize("nxt", ["@evil.example/api/?a=1", ":9999/x", "evil.com/x", "//evil.example/x", "///evil/x", "\\\\evil\\x", "/ok\\@evil/x",
+                                 "api/dcim/devices/", "/x\r\nHost: evil", "http://nb.local@evil.example/x"])
+def test_bad_next_is_refused_and_not_requested(nxt):
+    op = stub(page([{"a": 1}], nxt, count=2))
+    c = NetBoxClient("http://netbox.local", "tok", opener=op, sleep=lambda s: None)
+    # http://user@host form: only path/query are taken, which is safe, so it must still stay on base
+    if nxt.startswith("http://"):
+        op = stub(page([{"a": 1}], nxt, count=2), page([{"a": 2}]))
+        c = NetBoxClient("http://netbox.local", "tok", opener=op, sleep=lambda s: None)
+        c.get_all("/api/x/")
+        assert all(r.full_url.startswith("http://netbox.local/") for r in op.calls)
+        return
+    with pytest.raises(NetBoxError):
+        c.get_all("/api/x/")
+    assert len(op.calls) == 1
+
+
+def test_next_absolute_and_relative_path_accepted_encoded_chars_stay_in_path():
+    op = stub(page([{"a": 1}], "https://other.example/api/x/?offset=1&q=%2F%2Fevil", count=3),
+              page([{"a": 2}], "/api/x/?offset=2", count=3), page([{"a": 3}]))
+    c = NetBoxClient("http://netbox.local", "tok", opener=op, sleep=lambda s: None)
+    assert len(c.get_all("/api/x/")) == 3
+    assert [r.full_url for r in op.calls][1] == "http://netbox.local/api/x/?offset=1&q=%2F%2Fevil"
+
+
+def test_request_target_check_direct():
+    c = NetBoxClient("http://netbox.local", "tok", opener=stub())
+    for bad in ("x", "//h/x", "/a b", "/a\\b", "/a\nb", "@h/x"):
+        with pytest.raises(NetBoxError):
+            c._build_request("GET", bad)
+
+
+@pytest.mark.parametrize("tok", ["abc\n", "a b", "a\r\nX: y", "tab\t", "\x00", "é"])
+def test_bad_token_rejected_without_echo(tok):
+    with pytest.raises(NetBoxError) as e:
+        NetBoxClient("http://x", tok)
+    assert "whitespace/control" in str(e.value)
+    assert "abc" not in str(e.value) and "X: y" not in str(e.value)
+
+
+def test_env_token_trailing_newline(monkeypatch):
+    monkeypatch.setenv("NB_T2", "supersecret\n")
+    with pytest.raises(NetBoxError) as e:
+        NetBoxClient.from_env("http://x", "NB_T2")
+    assert "supersecret" not in str(e.value) and "whitespace" in str(e.value)
+
+
+def test_bad_host_header_rejected():
+    for h in ("a\r\nb", "a b", ""):
+        with pytest.raises(NetBoxError):
+            NetBoxClient("http://x", "tok", host_header=h)
+
+
+def test_value_error_from_opener_never_leaks_token():
+    secret = "TOPSECRETVALUE"
+
+    def opener(req, timeout=None):
+        raise ValueError(f"Invalid header value b'Bearer {secret}\\n'")
+    c = NetBoxClient("http://x", secret, opener=opener, sleep=lambda s: None)
+    with pytest.raises(NetBoxError) as e:
+        c.list_devices()
+    text = "".join(traceback.format_exception(e.value)) + str(e.value) + repr(e.value) + repr(c) + str(c)
+    assert secret not in text
+
+
+def test_real_http_client_rejects_bad_header_without_leak():
+    # a Host header the validator would reject is also impossible to reach http.client with
+    secret = "REALSECRET"
+    with pytest.raises(NetBoxError) as e:
+        NetBoxClient("http://127.0.0.1:1", secret + "\n").list_devices()
+    assert secret not in "".join(traceback.format_exception(e.value))
+
+
+@pytest.mark.parametrize("doc", [[1, 2], "x", {"results": "no", "count": 1}, {"count": 1}, {"results": [], "count": "1"},
+                                 {"results": [1], "count": 1}])
+def test_malformed_list_response(doc):
+    c = NetBoxClient("http://nb", "t", opener=stub(doc), sleep=lambda s: None)
+    with pytest.raises(NetBoxError, match="not a NetBox list"):
+        c.get_all("/api/x/")
+
+
+def test_truncated_read_detected():
+    c = NetBoxClient("http://nb", "t", opener=stub(page([{"a": 1}], None, count=5)), sleep=lambda s: None)
+    with pytest.raises(NetBoxError, match="truncated"):
+        c.get_all("/api/x/")
+
+
+def test_repeated_next_and_page_cap():
+    op = stub(page([{"a": 1}], "/api/x/?o=1", count=10), page([{"a": 2}], "/api/x/?o=1", count=10))
+    with pytest.raises(NetBoxError, match="does not end"):
+        NetBoxClient("http://nb", "t", opener=op, sleep=lambda s: None).get_all("/api/x/")
+    # distinct next URLs forever, but more pages than count/page-size + 2
+    docs = [page([{"a": 0}], "/api/x/?o=0", count=2)] + [page([{"a": i}], f"/api/x/?o={i}", count=2) for i in range(1, 10)]
+    with pytest.raises(NetBoxError, match="does not end"):
+        NetBoxClient("http://nb", "t", opener=stub(*docs), sleep=lambda s: None).get_all("/api/x/")
+
+
+def test_body_size_cap():
+    big = Resp(None, raw=b"x" * (16 * 1024 * 1024 + 5))
+    with pytest.raises(NetBoxError, match="larger than"):
+        NetBoxClient("http://nb", "t", opener=stub(big), sleep=lambda s: None).get_all("/api/x/")

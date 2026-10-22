@@ -35,3 +35,8 @@ The inventory can come from NetBox. A tag on a NetBox device selects what git co
 - `--emit` writes nothing when there is any problem or `invalid` result.
 - The seed model entries for the real NetBox device types (hEX, hEX PoE lite, RB951G-2HnD, RB433AH, CRS326, CCR1016, LHG 60G,
   PowerBeam, PowerBox Pro) carry conservative default capabilities, to be reviewed by the network owner.
+- Names are matched lower-cased: NetBox tags are lower-cased before matching, so template and feature names in git must be
+  lower-case (the loader already rejects anything else).
+- region = the NetBox region slug, role = the role slug, but site = the NetBox site **name**: `vars/site.yml` keys must equal the
+  NetBox site name exactly (case and spaces included).
+- Status must be exactly `active`; a missing status is unmanaged (`no status`). `primary_ip4` must be an IPv4 address.

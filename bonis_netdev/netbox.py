@@ -6,12 +6,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 PAGE_LIMIT = 200
+MAX_BODY = 16 * 1024 * 1024
+_VISIBLE = re.compile(r"^[\x21-\x7e]+$")          # printable ASCII, no whitespace, no control characters
+_BAD_PATH = re.compile(r"[\x00-\x20\x7f\\]")       # control chars, space, backslash
+_ABSOLUTE = re.compile(r"^https?://", re.I)
 
 
 class NetBoxError(RuntimeError):
@@ -34,10 +39,16 @@ class NetBoxClient:
             raise NetBoxError(f"token kind {token_kind!r} must be bearer or token")
         if not token:
             raise NetBoxError("empty NetBox token")
+        if not isinstance(token, str) or not _VISIBLE.fullmatch(token):
+            raise NetBoxError("token contains whitespace/control characters (or non-ASCII); a trailing newline from an env "
+                              "file must be removed")
+        if host_header is not None and (not isinstance(host_header, str) or not _VISIBLE.fullmatch(host_header)):
+            raise NetBoxError("host header contains whitespace/control characters (or non-ASCII) or is empty")
         parts = urllib.parse.urlsplit(base_url)
-        if parts.scheme not in ("http", "https") or not parts.netloc:
-            raise NetBoxError(f"base URL {base_url!r} must look like http(s)://host[:port]")
+        if parts.scheme not in ("http", "https") or not parts.netloc or "@" in parts.netloc or _BAD_PATH.search(base_url):
+            raise NetBoxError("base URL must look like http(s)://host[:port] (no user info)")
         self._base = f"{parts.scheme}://{parts.netloc}"
+        self._base_parts = parts
         self._token = token
         self._kind = token_kind
         self._host_header = host_header
@@ -64,12 +75,22 @@ class NetBoxClient:
         if method != "GET":
             raise NetBoxError(f"refusing {method} {path_and_query.split('?')[0]}: this client is read-only (GET only)")
         scheme = "Bearer" if self._kind == "bearer" else "Token"
+        self._check_target(path_and_query)
         req = urllib.request.Request(self._base + path_and_query, method="GET")
         req.add_header("Authorization", f"{scheme} {self._token}")
         req.add_header("Accept", "application/json")
         if self._host_header:
             req.add_header("Host", self._host_header)
         return req
+
+    def _check_target(self, path_and_query: str) -> None:
+        """The URL must stay on the configured base: the token is sent with it."""
+        shown = path_and_query.split("?")[0][:200]
+        if (not path_and_query.startswith("/") or path_and_query.startswith("//") or _BAD_PATH.search(path_and_query)):
+            raise NetBoxError(f"refusing request target {shown!r}: not a plain absolute path")
+        u = urllib.parse.urlsplit(self._base + path_and_query)
+        if (u.scheme, u.netloc) != (self._base_parts.scheme, self._base_parts.netloc) or u.username or u.password:
+            raise NetBoxError(f"refusing request target {shown!r}: it leaves the configured NetBox host")
 
     def _get_json(self, path_and_query: str):
         shown = path_and_query.split("?")[0]
@@ -78,7 +99,9 @@ class NetBoxClient:
             req = self._build_request("GET", path_and_query)
             try:
                 with self._opener(req, timeout=self._timeout) as resp:
-                    body = resp.read()
+                    body = resp.read(MAX_BODY + 1)
+                if len(body) > MAX_BODY:
+                    raise NetBoxError(f"GET {shown}: response larger than {MAX_BODY} bytes")
                 try:
                     return json.loads(body)
                 except ValueError:
@@ -89,6 +112,8 @@ class NetBoxClient:
                 last = f"HTTP {e.code}"
             except NetBoxError:
                 raise
+            except ValueError:   # e.g. http.client rejecting a header value; its message could echo the token
+                raise NetBoxError(f"GET {shown}: request could not be sent (invalid header or URL)") from None
             except (urllib.error.URLError, OSError) as e:
                 last = f"connection error ({type(e).__name__})"
             if attempt < self._retries:
@@ -101,18 +126,41 @@ class NetBoxClient:
 
     def get_all(self, path: str, params: dict | None = None) -> list[dict]:
         """All results of a list endpoint, following `next`. Only the path and query of `next` are used, against our own
-        base URL: NetBox builds that link from the Host header, which is wrong behind an SSH tunnel."""
-        doc = self.get(path, params)
-        out = list(doc.get("results", []))
-        seen = 0
+        base URL: NetBox builds that link from the Host header, which is wrong behind an SSH tunnel. A `next` that is not
+        an absolute http(s) URL must be a plain absolute path; anything else is refused."""
+        doc = self._page(self.get(path, params), path)
+        count = doc["count"]
+        out = list(doc["results"])
+        max_pages = -(-count // max(1, len(out))) + 2 if out else 2
+        visited = set()
+        pages = 1
         while doc.get("next"):
-            seen += 1
-            if seen > 10000:
-                raise NetBoxError(f"GET {path}: pagination does not end")
-            nxt = urllib.parse.urlsplit(doc["next"])
-            doc = self._get_json(nxt.path + (f"?{nxt.query}" if nxt.query else ""))
-            out.extend(doc.get("results", []))
+            raw = doc["next"]
+            if not isinstance(raw, str):
+                raise NetBoxError(f"GET {path}: malformed `next`")
+            if _ABSOLUTE.match(raw):
+                nxt = urllib.parse.urlsplit(raw)
+                target = nxt.path + (f"?{nxt.query}" if nxt.query else "")
+            else:
+                target = raw
+            self._check_target(target)
+            pages += 1
+            if target in visited or pages > max_pages:
+                raise NetBoxError(f"GET {path}: pagination does not end (repeated `next` or too many pages)")
+            visited.add(target)
+            doc = self._page(self._get_json(target), path)
+            out.extend(doc["results"])
+        if len(out) != count:
+            raise NetBoxError(f"GET {path}: got {len(out)} results but NetBox reported count {count} (truncated read)")
         return out
+
+    @staticmethod
+    def _page(doc, path):
+        if (not isinstance(doc, dict) or not isinstance(doc.get("results"), list)
+                or not all(isinstance(r, dict) for r in doc["results"])
+                or not isinstance(doc.get("count"), int) or isinstance(doc.get("count"), bool)):
+            raise NetBoxError(f"GET {path}: response is not a NetBox list (object with count and results)")
+        return doc
 
     # -- typed reads -------------------------------------------------------------------------------------------------
 

@@ -192,3 +192,35 @@ def test_emit_refused_when_problems(tmp_path, capsys):
         assert cli.main(args(srv, "--emit", str(out))) == 1
     assert not out.exists()
     assert "--emit refused" in capsys.readouterr().err
+
+
+def test_emit_refuses_symlink_dir(tmp_path, capsys):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    with FakeNetBox(clean_devices()) as srv:
+        assert cli.main(args(srv, "--emit", str(link))) == 1
+    assert list(real.iterdir()) == [] and "symlink" in capsys.readouterr().err
+
+
+def test_emit_files_mode_and_no_overwrite(tmp_path):
+    from bonis_netdev.reconcile import write_emit
+    out = tmp_path / "e"
+    write_emit(out, [{"intent": {"intent": "dns", "primary": "1.1.1.1"}, "targets": [{"name": "a", "host": "10.0.0.1"}]}])
+    assert (out / "dns-intent.yml").stat().st_mode & 0o111 == 0
+    # a file appearing between the check and the write (O_EXCL) or a non-empty dir is refused
+    with pytest.raises(Exception):
+        write_emit(out, [])
+
+
+def test_emit_symlinked_file_not_followed(tmp_path):
+    from bonis_netdev import reconcile as rc
+    out = tmp_path / "e"
+    out.mkdir()
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    (out / "index.yml").symlink_to(victim)
+    with pytest.raises(OSError):
+        rc._dump(out / "index.yml", {"a": 1})
+    assert victim.read_text() == "keep"

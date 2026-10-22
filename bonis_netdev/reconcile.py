@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -49,17 +50,23 @@ def _emit_groups(results: list[Result], hosts: dict[str, str]) -> list[dict]:
 
 
 def _check_emit_dir(path: Path) -> None:
+    if path.is_symlink():
+        raise NetBoxError(f"--emit {path}: is a symlink; refusing to write through it")
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise NetBoxError(f"--emit {path}: exists and is not an empty directory; refusing to write into it")
 
 
 def _dump(path: Path, doc) -> None:
-    path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    data = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True).encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)   # not secret; never overwrite
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
 
 
 def write_emit(path: Path, groups: list[dict]) -> list[str]:
     _check_emit_dir(path)
     path.mkdir(parents=True, exist_ok=True)
+    _check_emit_dir(path)       # re-check right before writing
     written = []
     index = []
     single = len(groups) == 1
