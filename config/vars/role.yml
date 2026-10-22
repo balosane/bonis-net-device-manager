@@ -1,0 +1,3 @@
+router:
+  scope: dhcp-networks
+  exclude: [192.168.88.0/24]

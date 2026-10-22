@@ -1,0 +1,7 @@
+# No driver yet: shows the invalid (missing capability) and n/a (no driver) paths.
+name: wifi-ap-5g
+domain: wifi
+requires: [wifi.5ghz.ap]
+params:
+  ssid: str?
+intent: wifi

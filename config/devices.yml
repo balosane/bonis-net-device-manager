@@ -1,0 +1,19 @@
+# Demo inventory: rt-site-b-1 is a hEX S with an AP template, so the check reports `invalid`.
+rt-site-a-1:
+  model: MikroTik RB4011
+  region: cz-east
+  site: site-a
+  role: router
+  templates: [core-router]
+ap-site-a-1:
+  model: Ubiquiti Rocket Prism 5AC
+  region: cz-east
+  site: site-a
+  role: ap
+  templates: [ap-5g]
+rt-site-b-1:
+  model: MikroTik hEX S
+  region: cz-east
+  site: site-b
+  role: router
+  templates: [core-router, ap-5g]

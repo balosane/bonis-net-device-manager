@@ -18,6 +18,8 @@ def _norm(servers: str | None) -> list[str]:
 
 
 class RouterOsDriver(Driver):
+    implements = frozenset({"dns-standard"})
+
     def __init__(self, major: int):
         self.major = major
         self.name = f"routeros{major}"

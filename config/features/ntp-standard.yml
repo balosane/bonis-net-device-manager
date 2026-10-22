@@ -1,0 +1,6 @@
+name: ntp-standard
+domain: ntp
+requires: [ntp.client]
+params:
+  servers: list
+intent: ntp

@@ -19,6 +19,7 @@ DNS_KEYS = ("resolv.nameserver.1.ip", "resolv.nameserver.2.ip")
 
 class AirosDriver(Driver):
     name = "airos"
+    implements = frozenset({"dns-standard"})
 
     def read_commands(self, intent) -> list[str]:
         return [CFG]

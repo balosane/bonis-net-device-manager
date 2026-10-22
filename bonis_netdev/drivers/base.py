@@ -13,6 +13,7 @@ from ..transport import Transport
 
 class Driver:
     name = "base"
+    implements: frozenset[str] = frozenset()   # feature names this driver class can plan
 
     def read_commands(self, intent) -> list[str]:
         raise NotImplementedError
@@ -46,3 +47,10 @@ def detect_driver(transport: Transport) -> Driver:
     if "=" in cfg:
         return AirosDriver()
     raise RuntimeError(f"{transport.host}: unknown device class")
+
+
+def driver_class(os_family: str) -> type[Driver]:
+    """The driver class for a catalog os_family (used to ask what it implements, no device needed)."""
+    from .airos import AirosDriver
+    from .routeros import RouterOsDriver
+    return {"routeros": RouterOsDriver, "airos": AirosDriver}[os_family]

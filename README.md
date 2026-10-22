@@ -77,6 +77,23 @@ refuse if the hash differs, replace exactly those keys in the whole file, and wr
 - Excluded prefixes (and anything inside them) are never planned, e.g. `192.168.88.0/24`, the MikroTik factory default LAN.
 - If a value was empty before, there is no automatic rollback; the plan says so in `notes`.
 
+## Templates and capabilities
+
+A **template** is an unordered list of feature tags (`core-router: [dns-standard, ntp-standard]`); a device may have several, they are
+merged. A **feature** (`config/features/*.yml`) declares its `domain`, the capabilities it `requires`, its `params` and the `intent` it
+produces. The **model catalog** (`config/models/*.yml`) lists each model's `os_family` and capabilities (to be read from NetBox device
+types later). Parameters are layered, the later layer wins: `global < region < site < role < device` (`config/vars/*.yml`), then the
+device's own `params`.
+
+```bash
+netdev check-templates                                   # ./config, devices from config/devices.yml
+netdev check-templates --devices config/devices.example.yml --json
+```
+
+Per (device, feature) the result is `ok` (capabilities present and a driver implements it), `invalid` (a required capability is
+missing: error, exit 1) or `n/a` (no driver for that OS family: skipped with a reason, never an error). Unknown tag, template or model
+and two features of one domain on one device are errors (exit 1). Offline: nothing is read from or sent to a device.
+
 ## Layout
 
 ```
@@ -85,7 +102,11 @@ bonis_netdev/drivers/       base, routeros, airos
 bonis_netdev/classify.py    what a command does; deny by default
 bonis_netdev/plan.py        Step, DevicePlan, Plan (plan_id, JSON, summary)
 bonis_netdev/transport.py   read-only SSH transport, fake transport for tests
-bonis_netdev/cli.py         netdev plan | show | check
+bonis_netdev/features.py    feature YAML, ConfigError
+bonis_netdev/catalog.py     model catalog
+bonis_netdev/templates.py   templates, layered vars, capability check
+config/                     seed features, models, templates, vars, devices
+bonis_netdev/cli.py         netdev plan | show | check | check-templates
 docs/DESIGN.md              design, decisions, what is not built yet
 ```
 

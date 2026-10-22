@@ -38,3 +38,15 @@ later be only the transport that runs an approved plan.
 - RouterOS output is parsed from `print detail`; tested on canned output and on a 21-router snapshot of the real fleet.
 - The credential list is tried in order (the fleet has several inherited passwords). Per-device overrides are not implemented.
 - No LICENSE file yet; the owner has to choose one before the repo is shared outside the company.
+
+
+## Templates and capabilities (`features.py`, `catalog.py`, `templates.py`)
+
+- A template is a set of feature tags; a device's templates are unioned. A feature has a `domain`; two features of one domain on
+  one device are a compile error. `protect` is reserved for features whose removal will need break-glass.
+- Compile result per (device, feature): `invalid` if the model lacks a required capability (checked first, hard error),
+  `n/a` if `Driver.implements` of the model's os_family lacks the feature (skipped with a reason), else `ok`. The implements table is
+  code next to the drivers, not YAML. `ntp-standard` is implemented by no driver yet.
+- Params are resolved only for `ok` results: layers `global < region < site < role < device`, then the device's own `params`; each
+  param is type-checked against the feature (`ip`, `str`, `int`, `bool`, `list`; trailing `?` = optional).
+- `templates.dns_intents()` converts `ok` results of intent `dns` into `intents.Dns`; no other mapping exists yet. Nothing here applies anything.

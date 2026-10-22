@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from dataclasses import dataclass, field
 
 
@@ -65,3 +66,24 @@ class Dns:
     def as_dict(self):
         return {"intent": "dns", "servers": list(self.servers), "scope": self.scope.as_dict(),
                 "reason": self.reason}
+
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$", re.I)
+
+
+@dataclass(frozen=True)
+class Ntp:
+    servers: tuple[str, ...]          # IP addresses or host names
+    reason: str = ""
+
+    def __post_init__(self):
+        if not self.servers:
+            raise IntentError("servers: at least one NTP server is required")
+        for s in self.servers:
+            if not _HOST_RE.match(s):
+                raise IntentError(f"servers: {s!r} is not an IP address or host name")
+        if len({s.lower() for s in self.servers}) != len(self.servers):
+            raise IntentError(f"duplicate NTP server in {self.servers}")
+
+    def as_dict(self):
+        return {"intent": "ntp", "servers": list(self.servers), "reason": self.reason}
