@@ -1,0 +1,16 @@
+namespace: bonis
+name: netdev
+version: 0.0.1
+readme: README.md
+authors:
+  - Bonis
+description: Modules of the Bonis network device manager (Ubiquiti airOS config changes).
+license_file: ''
+license:
+  - LicenseRef-Proprietary
+tags:
+  - networking
+  - ubiquiti
+  - airos
+dependencies: {}
+repository: https://example.invalid/bonis-net-device-manager

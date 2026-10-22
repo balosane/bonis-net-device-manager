@@ -69,6 +69,13 @@ For airOS the running config is the flat file `/tmp/system.cfg`. The plan never 
 PSK and password hashes). It holds `airos-cfg-set base=<sha256 of the file> key=value ...`: an executor must re-read the file,
 refuse if the hash differs, replace exactly those keys in the whole file, and write the whole file back. A partial file is never written.
 
+## Ansible module for airOS
+
+`ansible/collections/ansible_collections/bonis/netdev/` holds the collection `bonis.netdev` with the module `airos_cfg`: it
+applies the `airos-cfg-set` step of a plan (`base` hash + key/value settings) with a drift guard, check mode and a key-only diff.
+**Its write path is disabled** (`WRITES_ENABLED = False` in the module code); check mode is always read-only. See the
+collection README.
+
 ## Safety rules built in
 
 - Every command is classified (`read` / `update`); an unclassified one is refused (deny by default), including anything with `;`,
