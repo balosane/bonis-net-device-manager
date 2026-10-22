@@ -84,7 +84,10 @@ def test_apply_mode_follows_variable():
     literal = [t for t in leaves if t["check_mode"] is True]
     assert all(t["check_mode"] == "{{ netdev_check_only | bool }}" for t in leaves if t not in literal)
     # only the airOS gate and verify tasks are pinned to check mode in apply mode
-    assert literal and all("bonis.netdev.airos_cfg" in t for t in literal)
+    assert literal and all("bonis.netdev.airos_cfg" in t or "ansible.builtin.assert" in t for t in literal)
+    # the very first task refuses a non-boolean netdev_check_only (e.g. the string "false")
+    assert play["tasks"][0]["ansible.builtin.assert"]["that"] == ["netdev_check_only is boolean"]
+    assert yaml.safe_load(render_playbook(demo_plan()))[0]["tasks"][0]["ansible.builtin.assert"]["that"] == ["netdev_check_only is boolean"]
 
 
 def test_resolver_mapping():
@@ -231,7 +234,7 @@ def test_no_rollback_when_old_value_empty():
         Step("precheck", "/ip dns print", "p"),
         Step("change", "/ip dns set servers=1.1.1.1", "c"),
         Step("verify", "/ip dns print", "v", expect="servers: 1.1.1.1")])])
-    group = next(t for t in tasks_of(render_playbook(r))[1]["block"] if "block" in t)
+    group = next(t for t in tasks_of(render_playbook(r))[2]["block"] if "block" in t)
     assert "rescue" not in group
 
 
@@ -292,7 +295,7 @@ def test_verify_catches_extra_shell_task():
     text = edited(plan, lambda p: p["tasks"].append({"name": "x", "ansible.builtin.shell": "reboot", "check_mode": True}))
     v = verify_playbook(doc_of(plan), text)
     assert any("ansible.builtin.shell" in x and "allowlist" in x for x in v)
-    text = edited(plan, lambda p: p["tasks"][1]["block"].append({"name": "x", "raw": "reboot", "check_mode": True}))
+    text = edited(plan, lambda p: p["tasks"][2]["block"].append({"name": "x", "raw": "reboot", "check_mode": True}))
     assert any("'raw'" in x for x in verify_playbook(doc_of(plan), text))
 
 
@@ -359,3 +362,52 @@ def test_ansible_syntax_check(tmp_path):
                "ANSIBLE_LOCAL_TEMP": str(tmp_path / "tmp"), "ANSIBLE_HOME": str(tmp_path / "home")}
         r = subprocess.run([exe, "--syntax-check", str(pb)], capture_output=True, text=True, env=env, cwd=tmp_path)
         assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_check_only_boolean_assert_evaluates_with_jinja():
+    jinja2 = pytest.importorskip("jinja2")
+    env = jinja2.Environment()
+    expr = env.compile_expression("netdev_check_only is boolean")
+    assert expr(netdev_check_only=True) is True and expr(netdev_check_only=False) is True
+    for bad in ("false", "true", "False", 0, 1, None, "no"):
+        assert expr(netdev_check_only=bad) is False
+
+
+def test_verify_rejects_tampered_play_name_with_jinja():
+    plan = demo_plan()
+    text = edited(plan, lambda p: p.update(name="{{ lookup('pipe','id') }}"))
+    v = verify_playbook(doc_of(plan), text)
+    assert any("play name" in x for x in v) and any("Jinja" in x for x in v)
+    text = edited(plan, lambda p: p.update(name="harmless but different"))
+    assert any("play name" in x for x in verify_playbook(doc_of(plan), text))
+
+
+def test_verify_rejects_tampered_task_name():
+    plan = demo_plan()
+    text = edited(plan, lambda p: p["tasks"][2]["block"][0].update(name="{{ lookup('pipe','id') }}"))
+    v = verify_playbook(doc_of(plan), text)
+    assert any("differs" in x for x in v) and any("Jinja" in x for x in v)
+    text = edited(plan, lambda p: p["tasks"][2]["block"][0].update(name="renamed"))
+    assert any("differs" in x for x in verify_playbook(doc_of(plan), text))
+
+
+@pytest.mark.parametrize("marker", ["{{ lookup('pipe','id') }}", "{% if true %}x{% endif %}", "{# c #}"])
+def test_verify_rejects_injected_jinja_marker_in_vars_task_and_key(marker):
+    plan = demo_plan()
+    for fn in (lambda p: p["vars"].update(netdev_api_tls=marker),
+               lambda p: p["tasks"][1].update(name=marker),
+               lambda p: p.update({"# " + marker: "x"})):
+        v = verify_playbook(doc_of(plan), edited(plan, fn))
+        assert any("Jinja marker" in x for x in v), v
+
+
+def test_jinja_scan_walks_keys_and_values():
+    from bonis_netdev.render.ansible import _jinja_strings
+    assert set(_jinja_strings({"a": ["x {{ y }}"], "{#k": 1})) == {(("<key>", "{#k"), "{#k"), (("a", 0), "x {{ y }}")}
+
+
+def test_verify_legit_render_with_renderer_jinja_still_ok():
+    plan = demo_plan()
+    text = render_playbook(plan, check_only=False)
+    assert "{{ netdev_check_only | bool }}" in text
+    assert verify_playbook(doc_of(plan), text) == []

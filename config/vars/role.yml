@@ -1,3 +1,5 @@
 router:
   scope: dhcp-networks
   exclude: [192.168.88.0/24]
+ap: {}   # listed on purpose: a role named by a device must be a key of this file
+ptp: {}

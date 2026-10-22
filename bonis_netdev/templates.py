@@ -130,7 +130,22 @@ def load_config(directory, devices_file=None) -> Config:
         if unknown:
             raise ConfigError(f"{path}: device {dev.name}: params {', '.join(map(repr, unknown))} not declared by any feature "
                               f"(typo?)")
-    return Config(features, models, templates, load_vars(base / "vars"), devices)
+    vars_dir = base / "vars"
+    layers = load_vars(vars_dir)
+    for layer, entries in layers.items():
+        for name, mapping in entries.items():
+            unknown = sorted(set(mapping) - declared)
+            if unknown:
+                where = "global" if layer == "global" else f"{name!r}"
+                raise ConfigError(f"{vars_dir / (layer + '.yml')}: layer {layer}, {where}: key {', '.join(map(repr, unknown))} "
+                                  f"not declared by any feature (typo?)")
+    for dev in devices.values():
+        for layer, value in (("region", dev.region), ("site", dev.site), ("role", dev.role)):
+            layer_file = vars_dir / f"{layer}.yml"
+            if value is not None and layer_file.exists() and value not in layers[layer]:
+                raise ConfigError(f"{path}: device {dev.name}: {layer} {value!r} is not a key of {layer_file} "
+                                  f"(typo? the layer file exists, so every {layer} a device names must be listed in it)")
+    return Config(features, models, templates, layers, devices)
 
 
 def layered_params(cfg: Config, dev: Device) -> dict:

@@ -220,3 +220,33 @@ def test_unknown_device_param_key_is_an_error_naming_it(conf):
     # a param declared by ANY feature (even one the device does not use) is accepted
     d = {"d1": {**DEVICES["d1"], "params": {"servers": ["x.example"]}}}
     assert load_config(conf(devices=d)).devices["d1"].params == {"servers": ["x.example"]}
+
+
+@pytest.mark.parametrize("layer,content", [
+    ("global.yml", {"primary": "10.0.0.1", "secundary": "10.0.0.2"}),
+    ("region.yml", {"r1": {"secundary": "10.0.0.2"}}),
+    ("site.yml", {"s1": {"secundary": "10.0.0.2"}}),
+    ("role.yml", {"edge": {"secundary": "10.0.0.2"}}),
+    ("device.yml", {"d1": {"secundary": "10.0.0.2"}}),
+])
+def test_unknown_key_in_any_vars_layer_is_rejected(conf, layer, content):
+    vars_ = {**VARS, layer: content}
+    with pytest.raises(ConfigError) as e:
+        load_config(conf(vars_=vars_))
+    msg = str(e.value)
+    assert layer in msg and f"layer {layer[:-4]}" in msg and "'secundary'" in msg
+
+
+@pytest.mark.parametrize("field,layer", [("region", "region.yml"), ("site", "site.yml"), ("role", "role.yml")])
+def test_device_naming_absent_key_of_existing_layer_file_is_rejected(conf, field, layer):
+    d = {"d1": {**DEVICES["d1"], field: "nope"}}
+    with pytest.raises(ConfigError, match=f"{field} 'nope' is not a key of .*{layer}"):
+        load_config(conf(devices=d))
+
+
+def test_missing_layer_file_or_unset_field_is_allowed(conf):
+    d = {"d1": {**DEVICES["d1"], "site": "anything"}}
+    base = conf(devices=d, vars_={k: v for k, v in VARS.items() if k != "site.yml"})
+    assert load_config(base).devices["d1"].site == "anything"
+    d = {"d1": {"model": "R", "templates": ["core"]}}       # region/site/role unset, layer files exist
+    assert load_config(conf(devices=d)).devices["d1"].region is None

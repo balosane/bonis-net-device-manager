@@ -304,3 +304,13 @@ def test_indented_key_line_is_refused_not_silent_noop(writes_on):
     # unchanged value on an indented line is not a change, so it is not an error
     r = lib.run_module(params(settings={"indented.val": "old"}), True, Fake(text=text))
     assert not r.get("failed") and r["changed"] is False
+
+
+def test_indented_duplicate_of_column0_key_is_refused(writes_on):
+    key = next(l.split("=", 1)[0] for l in CFG.splitlines() if "=" in l and l == l.lstrip())
+    text = CFG.rstrip("\n") + "\n  %s=dup\n" % key
+    for check in (True, False):
+        t = Fake(text=text)
+        r = lib.run_module(params(settings={key: "changed-value"}), check, t)
+        assert r["failed"] and "leading whitespace" in r["msg"] and key in r["msg"]
+        assert t.cmds == [lib.READ_CFG]

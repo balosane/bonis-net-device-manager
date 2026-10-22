@@ -15,6 +15,13 @@
     netdev_api_tls: false
     netdev_validate_certs: false
   tasks:
+  - name: netdev_check_only must be a real boolean (not a string such as 'false')
+    ansible.builtin.assert:
+      that:
+      - netdev_check_only is boolean
+      fail_msg: 'netdev_check_only must be a JSON boolean; pass -e ''{"netdev_check_only": false}'''
+      quiet: true
+    check_mode: true
   - name: 'plan 3d7ae04289ea: check mode only'
     ansible.builtin.debug:
       msg: netdev plan 3d7ae04289eaf79fa54c3840277b3853bfbfb74279b8d0fd5b2e12bad21af455

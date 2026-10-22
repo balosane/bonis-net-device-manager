@@ -301,7 +301,12 @@ def _build(plan: Plan, check_only: bool) -> list[dict]:
         tags.append(blk["tags"][0])
         blocks.append(blk)
     pid = plan.plan_id
-    tasks = [{"name": f"plan {pid[:12]}: {'check mode only' if check_only else 'APPLY MODE'}",
+    tasks = [{"name": "netdev_check_only must be a real boolean (not a string such as 'false')",
+              M_ASSERT: {"that": ["netdev_check_only is boolean"],
+                         "fail_msg": "netdev_check_only must be a JSON boolean; pass -e '{\"netdev_check_only\": false}'",
+                         "quiet": True},
+              "check_mode": True},
+             {"name": f"plan {pid[:12]}: {'check mode only' if check_only else 'APPLY MODE'}",
               M_DEBUG: {"msg": f"netdev plan {pid}"},
               "check_mode": True if check_only else "{{ netdev_check_only | bool }}"}] + blocks
     play = {
@@ -339,6 +344,23 @@ def _walk(tasks):
 
 def _label(t) -> str:
     return repr(t.get("name", "?")) if isinstance(t, dict) else repr(t)
+
+
+_JINJA = ("{{", "{%", "{#")
+
+
+def _jinja_strings(obj, path=()):
+    """(path, string) of every key and value that contains a Jinja marker; keys are marked with a '<key>' path element."""
+    if isinstance(obj, str):
+        if any(m in obj for m in _JINJA):
+            yield path, obj
+    elif isinstance(obj, dict):
+        for k, val in obj.items():
+            yield from _jinja_strings(k, path + ("<key>", str(k)))
+            yield from _jinja_strings(val, path + (str(k),))
+    elif isinstance(obj, list):
+        for i, val in enumerate(obj):
+            yield from _jinja_strings(val, path + (i,))
 
 
 def verify_playbook(plan_json: dict, playbook_text: str, *, require_check_only: bool = False) -> list[str]:
@@ -387,6 +409,7 @@ def verify_playbook(plan_json: dict, playbook_text: str, *, require_check_only: 
         if check_only is True and "block" not in t and t.get("check_mode") is not True:
             v.append(f"task {_label(t)} lacks check_mode: true in a check-only playbook")
 
+    expected = None
     if isinstance(check_only, bool):
         try:
             expected = _build(plan_from_dict(plan_json), check_only)[0]
@@ -400,4 +423,14 @@ def verify_playbook(plan_json: dict, playbook_text: str, *, require_check_only: 
         if tasks != expected["tasks"]:
             v.append("task list differs from the playbook re-rendered from the plan "
                      "(reordered, added, removed or modified task)")
+        if play.get("name") != expected["name"]:
+            v.append(f"play name {play.get('name')!r} differs from the re-rendered playbook")
+        if play != expected and not v:
+            v.append("playbook differs from the playbook re-rendered from the plan")
+    # defence in depth: Ansible templates strings (names, vars...), so a Jinja marker that the renderer did not emit at
+    # exactly this place could run code on the controller
+    allowed = set(_jinja_strings(expected)) if expected is not None else set()
+    for path, text in _jinja_strings(play):
+        if (path, text) not in allowed:
+            v.append(f"unexpected Jinja marker in {'/'.join(map(str, path)) or 'play'}: {text[:60]!r}")
     return v

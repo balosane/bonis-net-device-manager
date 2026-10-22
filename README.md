@@ -91,7 +91,7 @@ violation: the playbook's `netdev_plan_id` must equal the recomputed plan id, `p
 modules may be used (`community.routeros.api_info`, `community.routeros.api_modify`, `bonis.netdev.airos_cfg`, and
 `ansible.builtin.debug|assert|set_fact`), and the tasks must equal the playbook re-rendered from the plan. Credentials come
 from the variables `netdev_user` / `netdev_pass`, never from the file. `--apply-mode` renders without forcing `check_mode`
-(it follows `netdev_check_only`, rendered as `false`; override with `-e '{"netdev_check_only": false}'`, a JSON boolean) and
+(it follows `netdev_check_only`, rendered as `false`; override with `-e '{"netdev_check_only": false}'`, a JSON boolean: the first task asserts `netdev_check_only is boolean`, so a string like `"false"` aborts the run) and
 prints a warning: writes on the fleet stay banned until the owner lifts the ban. The airOS precheck gate and verify steps are
 always `check_mode: true`. Details: [docs/DESIGN.md](docs/DESIGN.md#ansible-executor-bonisisp-41).
 

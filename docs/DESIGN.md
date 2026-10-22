@@ -38,6 +38,11 @@ later be only the transport that runs an approved plan.
 - airOS: only the resolver scope; clearing a key (fewer servers than before) is reported as unsupported.
 - RouterOS output is parsed from `print detail`; tested on canned output and on a 21-router snapshot of the real fleet.
 - The credential list is tried in order (the fleet has several inherited passwords). Per-device overrides are not implemented.
+- Vars layers are validated strictly: every key in every layer must be declared by some feature, and a device may only name a
+  region/site/role that is a key of the corresponding layer file when that file exists (a missing file or an unset field is not
+  checked). See config/README.md.
+- airOS rollback with `base: current` can overwrite an edit made on the device during the short window between a written change
+  and the rescue.
 - No LICENSE file yet; the owner has to choose one before the repo is shared outside the company.
 
 
@@ -105,12 +110,13 @@ Jinja syntax (`{{`, `{%`, `{#`) is refused because Ansible templates string argu
 **Check-only.** By default every task has `check_mode: true` and the play var `netdev_check_only: true`. `--apply-mode` renders
 `check_mode: "{{ netdev_check_only | bool }}"` with `netdev_check_only: false`; writes stay banned on the fleet until the owner lifts it.
 Every condition uses `netdev_check_only | bool`, and verify tasks run `when: not (netdev_check_only | bool)`. Pass the override as a
-JSON boolean, `-e '{"netdev_check_only": false}'`: `-e netdev_check_only=false` is a string, which only the `| bool` filter treats as false.
+JSON boolean, `-e '{"netdev_check_only": false}'`: the first task of every playbook asserts `netdev_check_only is boolean`, so
+a string such as `-e netdev_check_only=false` aborts the run before anything else happens.
 
 **Verification** (`verify_playbook`, returns a list of violations): plan.json recomputes to its own plan_id; the playbook's
 `netdev_plan_id` equals it; every module is in `ALLOWLIST`; no task lacks `check_mode: true` in a check-only playbook; no extra
 play keys (roles, pre_tasks, imports ...); the whole play equals the playbook re-rendered from the plan. The last check makes the
-others redundant, but they give clear messages.
+others redundant, but they give clear messages. The comparison covers every play key including `name` (Ansible templates it). As defence in depth, any `{{`, `{%` or `{#` in any key or value of the loaded playbook that the re-render does not contain at the same path is a violation.
 
 **Contract for `bonis.netdev.airos_cfg`** (implemented elsewhere): args `host`, `username`, `password` (no_log), `base`
 (64-hex sha256 of `/tmp/system.cfg` or `current`), `settings` (dict key -> str), `state: present`; supports check mode; returns

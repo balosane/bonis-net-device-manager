@@ -1,2 +1,3 @@
 site-a:
   secondary: 192.168.6.2
+site-b: {}   # no overrides, listed on purpose (see config/README.md)
