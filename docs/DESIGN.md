@@ -50,3 +50,20 @@ later be only the transport that runs an approved plan.
 - Params are resolved only for `ok` results: layers `global < region < site < role < device`, then the device's own `params`; each
   param is type-checked against the feature (`ip`, `str`, `int`, `bool`, `list`; trailing `?` = optional).
 - `templates.dns_intents()` converts `ok` results of intent `dns` into `intents.Dns`; no other mapping exists yet. Nothing here applies anything.
+
+## Ansible module for airOS (`bonis.netdev.airos_cfg`)
+
+- **Why a module**: the plan's airOS change step is `base` hash + key/value pairs. Ansible only transports it; the logic
+  (drift guard, diff, verify, restore) stays in tested Python. The module runs on the controller (`connection: local`) over
+  `sshpass`/`ssh`, because the AP has no Python. The password goes in `SSHPASS`, not in argv.
+- **Self-contained**: modules run from a zip of the collection, so `module_utils/airos_cfg.py` copies the small pieces it needs
+  (`cfg_parse`, sha256, SSH options, read command) instead of importing `bonis_netdev`; a test runs both implementations on the same inputs.
+- **Flow**: read `/tmp/system.cfg` -> hash -> fail if `base` is not `current` and differs -> diff only differing keys -> no diff, no write.
+  Credential-like keys (psk, password, hash...) are masked in the diff; the whole file is never returned.
+- **Write path** (implemented, OFF): `WRITES_ENABLED = False` is a code constant. When on: `sed -i` on the exact key line or an
+  appended `printf` line, then `cfgmtd -w -p /etc/persistent/`, re-read, verify; on a failed verify the previous values are written
+  back (missing keys deleted) and the run fails. Keys `[A-Za-z0-9_.-]+`; values reject newline, CR, NUL, backtick, `;`, `$(`.
+- **Deny by default**: a `GuardedTransport` runs only `cat /tmp/system.cfg` and, with writes on, commands matching the generated write shapes.
+  Check mode never reaches a write command even with the flag on.
+- **Not built**: the playbook renderer, a rollback run through the module (a rollback step is the same module with `base: current`),
+  atomic whole-file replace (the sed edits are in place; a power loss between edit and `cfgmtd` leaves /tmp, not flash, changed).

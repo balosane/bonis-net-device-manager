@@ -3,7 +3,9 @@
 ## Unreleased
 - Templates of features with capability checking (BONISISP-40): `features.py`, `catalog.py`, `templates.py`, seed `config/`,
   `Ntp` intent (no driver), `Driver.implements`, `netdev check-templates [--config DIR] [--devices FILE] [--json]`.
-- pyproject: package discovery limited to `bonis_netdev*` (the new top-level `config/` broke automatic discovery).
+- pyproject: package discovery limited to `bonis_netdev*` (new top-level `config/` and `ansible/` broke automatic discovery).
+- Ansible collection `bonis.netdev` with module `airos_cfg` (BONISISP-42): drift guard on the config hash, check mode, key-only diff,
+  deny-by-default command allowlist. Write path implemented but disabled (`WRITES_ENABLED = False`).
 
 ## 0.0.1 (prototype)
 - Intent `Dns` (DHCP networks with exclusions, or the device resolver).
