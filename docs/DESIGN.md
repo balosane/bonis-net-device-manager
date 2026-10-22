@@ -121,3 +121,16 @@ others redundant, but they give clear messages. The comparison covers every play
 **Contract for `bonis.netdev.airos_cfg`** (implemented elsewhere): args `host`, `username`, `password` (no_log), `base`
 (64-hex sha256 of `/tmp/system.cfg` or `current`), `settings` (dict key -> str), `state: present`; supports check mode; returns
 `changed` and `diff`. It must fail when `base` is a hash and the file no longer matches.
+
+### Controller flow: `netdev run-playbook` only
+
+`verify_playbook` proves only the playbook text. Ansible also loads `host_vars/`, `group_vars/`, `ansible.cfg`, `collections/`,
+`roles/`, inventory and `ANSIBLE_*` environment variables from the playbook directory / working directory (reviewer proof: a
+`host_vars/localhost.yml` with `ansible_python_interpreter: "{{ lookup('pipe', ...) }}"` ran a command on the controller even
+with `--check`), and verify-then-run on a path is a TOCTOU window. Therefore `netdev run-playbook` (`render/runner.py`) is the only
+supported executor: bytes are read once, verified (`require_check_only=True`) and executed from memory; the run happens in a fresh
+empty 0700 temp dir holding `plan.json`, `playbook.yml`, a generated `ansible.cfg` (fixed collections path), `inventory.ini`
+(`localhost ansible_connection=local`) and a 0600 `creds.json` (from `NETDEV_USER` / `NETDEV_PASS`, removed with the dir);
+the environment contains only PATH, HOME, LANG and ANSIBLE_CONFIG. `--check --diff` is always passed and `RUN_APPLY_ENABLED = False`
+(a code constant, no flag changes it) refuses apply-mode playbooks. Running `ansible-playbook` directly on an MR checkout is
+unsupported and unsafe. `verify-playbook` warns about hazard names next to the playbook (`--strict-dir` fails).

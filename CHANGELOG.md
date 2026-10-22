@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Third review fix: `netdev run-playbook` (`render/runner.py`) is the only supported executor: single read + verify of the bytes,
+  fresh empty temp dir with controller-owned `ansible.cfg`/`inventory.ini`, scrubbed environment, credentials via a 0600 vars file,
+  always `--check --diff`, `RUN_APPLY_ENABLED = False`. `verify-playbook` warns (`--strict-dir` fails) on host_vars/, group_vars/,
+  ansible.cfg, collections/, roles/ next to the playbook.
 - Templates of features with capability checking (BONISISP-40): `features.py`, `catalog.py`, `templates.py`, seed `config/`,
   `Ntp` intent (no driver), `Driver.implements`, `netdev check-templates [--config DIR] [--devices FILE] [--json]`.
 - pyproject: package discovery limited to `bonis_netdev*` (new top-level `config/` and `ansible/` broke automatic discovery).

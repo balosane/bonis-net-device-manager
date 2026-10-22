@@ -282,6 +282,13 @@ def _cmd_render_playbook(a) -> int:
 
 def _cmd_verify_playbook(a) -> int:
     from .render import verify_playbook
+    from .render.runner import dir_hazards
+    hazards = dir_hazards(a.playbook)
+    for h in hazards:
+        print(f"WARNING: {h} exists next to the playbook; Ansible would load it. Use `netdev run-playbook`.", file=sys.stderr)
+    if hazards and a.strict_dir:
+        print("VIOLATION: unverified Ansible inputs next to the playbook (--strict-dir)")
+        return 1
     with open(a.playbook, encoding="utf-8") as f:
         violations = verify_playbook(_load_plan(a.plan), f.read(), require_check_only=a.require_check_only)
     for line in violations:
@@ -339,7 +346,17 @@ def main(argv=None) -> int:
     p.add_argument("plan")
     p.add_argument("playbook")
     p.add_argument("--require-check-only", action="store_true")
+    p.add_argument("--strict-dir", action="store_true", help="fail when host_vars/, group_vars/, ansible.cfg, collections/ or roles/ sit next to the playbook")
     p.set_defaults(fn=_cmd_verify_playbook)
+    p = sub.add_parser("run-playbook", help="verify and run a generated playbook in --check mode (the only supported way)")
+    p.add_argument("plan")
+    p.add_argument("playbook")
+    p.add_argument("--limit-tags")
+    p.add_argument("--ansible-venv-bin", help="directory holding ansible-playbook (default: PATH)")
+    p.add_argument("--collections-path", help="extra collections path (e.g. where community.routeros is installed)")
+    p.add_argument("--apply", action="store_true", help=argparse.SUPPRESS)
+    from .render.runner import cmd_run_playbook
+    p.set_defaults(fn=cmd_run_playbook)
     a = ap.parse_args(argv)
     try:
         return a.fn(a)

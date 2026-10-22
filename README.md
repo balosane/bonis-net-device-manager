@@ -95,6 +95,16 @@ from the variables `netdev_user` / `netdev_pass`, never from the file. `--apply-
 prints a warning: writes on the fleet stay banned until the owner lifts the ban. The airOS precheck gate and verify steps are
 always `check_mode: true`. Details: [docs/DESIGN.md](docs/DESIGN.md#ansible-executor-bonisisp-41).
 
+**Controller flow: `netdev run-playbook plan.json playbook.yml [--limit-tags TAGS] [--ansible-venv-bin DIR]` is the only
+supported way to run a generated playbook.** It reads both files once, verifies those bytes (check-only required), copies them
+into a fresh empty mode-700 temp directory with a controller-owned `ansible.cfg` and `inventory.ini`, runs `ansible-playbook`
+there with a scrubbed environment (no `ANSIBLE_*` from the caller) and always `--check --diff`; credentials come from
+`NETDEV_USER` / `NETDEV_PASS` via a temporary 0600 vars file, never argv. Apply is impossible (`RUN_APPLY_ENABLED = False` in
+`bonis_netdev/render/runner.py`). Running `ansible-playbook` directly on an MR checkout is unsupported and unsafe: Ansible also
+loads `host_vars/`, `group_vars/`, `ansible.cfg`, `collections/`, `roles/`, inventory and `ANSIBLE_*` variables that
+`verify-playbook` does not cover (a `host_vars` file can run a shell command on the controller even in `--check`).
+`verify-playbook` warns when such names sit next to the playbook (`--strict-dir` makes that a failure).
+
 ## Safety rules built in
 
 - Every command is classified (`read` / `update`); an unclassified one is refused (deny by default), including anything with `;`,
