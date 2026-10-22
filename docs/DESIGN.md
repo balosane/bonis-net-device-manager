@@ -130,7 +130,9 @@ others redundant, but they give clear messages. The comparison covers every play
 with `--check`), and verify-then-run on a path is a TOCTOU window. Therefore `netdev run-playbook` (`render/runner.py`) is the only
 supported executor: bytes are read once, verified (`require_check_only=True`) and executed from memory; the run happens in a fresh
 empty 0700 temp dir holding `plan.json`, `playbook.yml`, a generated `ansible.cfg` (fixed collections path), `inventory.ini`
-(`localhost ansible_connection=local`) and a 0600 `creds.json` (from `NETDEV_USER` / `NETDEV_PASS`, removed with the dir);
+(`localhost ansible_connection=local`) and a 0600 `creds.yml` (from `NETDEV_USER` / `NETDEV_PASS`, removed with the dir; values are written as `!unsafe` so Ansible never templates them);
 the environment contains only PATH, HOME, LANG and ANSIBLE_CONFIG. `--check --diff` is always passed and `RUN_APPLY_ENABLED = False`
 (a code constant, no flag changes it) refuses apply-mode playbooks. Running `ansible-playbook` directly on an MR checkout is
 unsupported and unsafe. `verify-playbook` warns about hazard names next to the playbook (`--strict-dir` fails).
+
+- Trust boundary of `run-playbook`: the playbook is verified byte for byte, the collection code that runs it (`ansible/collections`, `--collections-path`) is not. A change to that code is write-capable and needs the owner's review while the write ban lasts.

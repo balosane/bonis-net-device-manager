@@ -17,7 +17,9 @@ import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 rec = {{"argv": sys.argv, "cwd": os.getcwd(), "env": dict(os.environ), "files": sorted(os.listdir(".")),
         "playbook": open("playbook.yml", "rb").read().decode(), "cwd_mode": oct(os.stat(".").st_mode & 0o777),
-        "creds_mode": oct(os.stat("creds.json").st_mode & 0o777) if os.path.exists("creds.json") else None}}
+        "creds_mode": oct(os.stat("creds.yml").st_mode & 0o777) if os.path.exists("creds.yml") else None,
+        "creds": open("creds.yml").read() if os.path.exists("creds.yml") else None,
+        "cfg": open("ansible.cfg").read()}}
 json.dump(rec, open(os.path.join(here, "record.json"), "w"))
 """
 
@@ -63,7 +65,7 @@ def test_scrubbed_env_and_clean_cwd(setup, monkeypatch):
     assert set(env) <= {"PATH", "HOME", "LANG", "ANSIBLE_CONFIG"}
     assert env["ANSIBLE_CONFIG"] == os.path.join(rec["cwd"], "ansible.cfg")
     assert env["HOME"] == rec["cwd"]
-    assert rec["files"] == ["ansible.cfg", "creds.json", "inventory.ini", "plan.json", "playbook.yml"]
+    assert rec["files"] == ["ansible.cfg", "creds.yml", "inventory.ini", "plan.json", "playbook.yml"]
     assert rec["cwd_mode"] == "0o700" and rec["creds_mode"] == "0o600"
     assert not os.path.exists(rec["cwd"])
 
@@ -73,7 +75,7 @@ def test_check_always_and_creds_not_in_argv(setup):
     argv = rec["argv"]
     assert "--check" in argv and "--diff" in argv
     assert argv[argv.index("--tags") + 1] == "dev_DEMO_AP"
-    assert "@creds.json" in argv
+    assert "@creds.yml" in argv
     assert not any("s3cret-pass" in x or "admin-user" in x for x in argv)
     assert "s3cret-pass" not in json.dumps(rec["env"])
 
@@ -172,3 +174,12 @@ def test_real_ansible_syntax_check(tmp_path):
     rc = run_playbook(str(tmp_path / "plan.json"), str(tmp_path / "playbook.yml"), ansible_venv_bin=venv,
                       collections_path=coll, syntax_only=True)
     assert rc == 0
+
+
+def test_credentials_are_unsafe_tagged_and_sys_path_scan_off(setup, monkeypatch):
+    monkeypatch.setenv("NETDEV_PASS", 'p{{ lookup("pipe", "id") }}w')
+    rc, rec = run(setup)
+    assert rc == 0
+    assert "netdev_user: !unsafe " in rec["creds"] and "netdev_pass: !unsafe " in rec["creds"]
+    assert "{{" in rec["creds"]  # kept literally, never templated because of the tag
+    assert "collections_scan_sys_path = False" in rec["cfg"]

@@ -26,6 +26,8 @@ from .ansible import verify_playbook
 # Fleet-wide write ban: turning this on is a code change that needs the owner's explicit approval.
 RUN_APPLY_ENABLED = False
 
+# Trust boundary: the playbook bytes are verified, the collection code that executes them is not. A change under
+# ansible/collections (or a --collections-path) is write-capable code and needs the owner's review under the write ban.
 DEFAULT_COLLECTIONS_PATH = str(Path(__file__).resolve().parents[2] / "ansible" / "collections")
 HAZARD_NAMES = ("host_vars", "group_vars", "ansible.cfg", "collections", "roles")
 
@@ -103,6 +105,7 @@ def run_playbook(plan_path: str, playbook_path: str, *, limit_tags: str | None =
             "inventory = inventory.ini\n"
             f"collections_path = {coll}\n"
             "retry_files_enabled = False\n"
+            "collections_scan_sys_path = False\n"
             "stdout_callback = default\n"
             "deprecation_warnings = False\n").encode())
         cmd = [binary, "-i", "inventory.ini", "playbook.yml", "--check", "--diff"]
@@ -111,8 +114,10 @@ def run_playbook(plan_path: str, playbook_path: str, *, limit_tags: str | None =
         if syntax_only:
             cmd.append("--syntax-check")
         else:
-            _write(os.path.join(tmp, "creds.json"), json.dumps({"netdev_user": user, "netdev_pass": pw}).encode())
-            cmd += ["-e", "@creds.json"]
+            # !unsafe: Ansible must not run Jinja over the credential values
+            _write(os.path.join(tmp, "creds.yml"),
+                   f"netdev_user: !unsafe {json.dumps(user)}\nnetdev_pass: !unsafe {json.dumps(pw)}\n".encode())
+            cmd += ["-e", "@creds.yml"]
         env = {"PATH": os.pathsep.join(p for p in (os.path.dirname(binary), os.environ.get("PATH", "/usr/bin:/bin")) if p),
                "HOME": tmp, "LANG": os.environ.get("LANG", "C.UTF-8"),
                "ANSIBLE_CONFIG": os.path.join(tmp, "ansible.cfg")}
