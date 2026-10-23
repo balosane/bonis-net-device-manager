@@ -105,6 +105,7 @@
         tls: '{{ netdev_api_tls }}'
         validate_certs: '{{ netdev_validate_certs }}'
         path: system logging action
+        hide_defaults: false
       register: netdev_r_1_1
       check_mode: true
     - name: 'R7: re-read the action; it must still hold the planned old values: value'
@@ -126,6 +127,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: system logging action
+          hide_defaults: false
         register: netdev_r_1_2
         check_mode: true
       - name: 'R7: change netdev-remote: action must exist with target remote'
@@ -160,6 +162,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: system logging action
+          hide_defaults: false
         register: netdev_r_1_3
         check_mode: true
         when: not (netdev_check_only | bool)
@@ -183,6 +186,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: system logging action
+          hide_defaults: false
         register: netdev_r_1_4
         check_mode: true
       - name: 'R7: rollback netdev-remote: action must exist with target remote'

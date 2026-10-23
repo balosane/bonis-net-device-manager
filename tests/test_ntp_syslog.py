@@ -645,3 +645,22 @@ def test_classify_tightened_octets_and_ports(cmd):
 @pytest.mark.parametrize("port", [1, 9, 10, 514, 9999, 10000, 65535, 65500, 60000])
 def test_classify_port_boundaries_accepted(port):
     assert effect_of(f"/system logging action set [find name=netdev-remote] remote=255.255.255.255 remote-port={port}") == Effect.UPDATE
+
+
+def _walk_tasks(tasks):
+    for t in tasks:
+        if "block" in t:
+            yield from _walk_tasks(t["block"])
+            yield from _walk_tasks(t.get("rescue", []))
+        else:
+            yield t
+
+
+@pytest.mark.parametrize("plan_fn", [ntp_plan, syslog_plan])
+def test_every_api_info_returns_default_values_too(plan_fn):
+    # api_info hides values equal to the collection defaults (0.0.0.0, '', False) unless hide_defaults is false; the
+    # asserts compare real values, so a hidden default made the live NTP precheck fail on RouterOS 6.
+    tasks = list(_walk_tasks(yaml.safe_load(render_playbook(plan_fn()))[0]["tasks"]))
+    infos = [t for t in tasks if "community.routeros.api_info" in t]
+    assert infos
+    assert all(t["community.routeros.api_info"]["hide_defaults"] is False for t in infos)

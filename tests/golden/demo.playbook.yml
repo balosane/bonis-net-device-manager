@@ -104,6 +104,7 @@
         tls: '{{ netdev_api_tls }}'
         validate_certs: '{{ netdev_validate_certs }}'
         path: ip dhcp-server network
+        hide_defaults: false
       register: netdev_r_1_1
       check_mode: true
     - name: 'DEMO-ROUTER: 192.168.80.0/26: dns-server must still be 192.168.6.1,8.8.8.8: value'
@@ -122,6 +123,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_2
         check_mode: true
       - name: 'DEMO-ROUTER: change 192.168.80.0/26: network must exist'
@@ -153,6 +155,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_3
         check_mode: true
         when: not (netdev_check_only | bool)
@@ -173,6 +176,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_4
         check_mode: true
       - name: 'DEMO-ROUTER: rollback 192.168.80.0/26: network must exist'
@@ -211,6 +215,7 @@
         tls: '{{ netdev_api_tls }}'
         validate_certs: '{{ netdev_validate_certs }}'
         path: ip dhcp-server network
+        hide_defaults: false
       register: netdev_r_1_5
       check_mode: true
     - name: 'DEMO-ROUTER: 10.15.5.208/29: dns-server must still be 192.168.6.1: value'
@@ -229,6 +234,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_6
         check_mode: true
       - name: 'DEMO-ROUTER: change 10.15.5.208/29: network must exist'
@@ -260,6 +266,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_7
         check_mode: true
         when: not (netdev_check_only | bool)
@@ -280,6 +287,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: ip dhcp-server network
+          hide_defaults: false
         register: netdev_r_1_8
         check_mode: true
       - name: 'DEMO-ROUTER: rollback 10.15.5.208/29: network must exist'

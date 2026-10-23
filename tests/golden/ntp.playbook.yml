@@ -109,6 +109,7 @@
         tls: '{{ netdev_api_tls }}'
         validate_certs: '{{ netdev_validate_certs }}'
         path: system ntp client
+        hide_defaults: false
       register: netdev_r_1_1
       check_mode: true
     - name: 'R6: re-read the NTP client; it must still hold the planned old values: value'
@@ -144,6 +145,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: system ntp client
+          hide_defaults: false
         register: netdev_r_1_2
         check_mode: true
         when: not (netdev_check_only | bool)
@@ -192,6 +194,7 @@
         tls: '{{ netdev_api_tls }}'
         validate_certs: '{{ netdev_validate_certs }}'
         path: system ntp client
+        hide_defaults: false
       register: netdev_r_2_1
       check_mode: true
     - name: 'R7: re-read the NTP client; it must still hold the planned old values: value'
@@ -225,6 +228,7 @@
           tls: '{{ netdev_api_tls }}'
           validate_certs: '{{ netdev_validate_certs }}'
           path: system ntp client
+          hide_defaults: false
         register: netdev_r_2_2
         check_mode: true
         when: not (netdev_check_only | bool)

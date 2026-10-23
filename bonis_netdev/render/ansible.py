@@ -121,6 +121,10 @@ class _Ctx:
 
     def task(self, name: str, module: str, args: dict, *, register: str | None = None, verify: bool = False,
              always_check: bool = False) -> dict:
+        if module == M_INFO:
+            # api_info hides values equal to the collection's defaults (0.0.0.0, '', False) unless told not to; every
+            # assert here compares the real value, so ask for all of them
+            args = {**args, "hide_defaults": False}
         t: dict = {"name": f"{self.dev.device}: {_safe(name, 'task name')}", module: args}
         if register:
             t["register"] = register

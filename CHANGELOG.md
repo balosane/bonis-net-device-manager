@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Renderer: every `api_info` task passes `hide_defaults: false`. Found by a live `--check` run on RouterOS 6.47.7: `api_info` hides values equal to the
+  collection defaults (`secondary-ntp` 0.0.0.0, empty `servers`, `enabled` no), so the NTP precheck asserted a value that was not returned.
 - Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,
   multicast, broadcast/reserved, link-local; classify/renderer octets 0-255 and ports 1-65535; airOS refuses to create a key
   that a rollback would leave active; explicit IPv6-NTP limit.
