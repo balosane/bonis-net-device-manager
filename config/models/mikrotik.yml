@@ -1,8 +1,10 @@
 # Capabilities are maintained here for now; they will be read from NetBox device types later.
 - model: MikroTik hEX S
+  aliases: [hEX S, RB760iGS]    # alias = the NetBox device type model (matched when '<manufacturer> <model>' is not a catalog name)
   os_family: routeros
   capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
 - model: MikroTik RB4011
+  aliases: [RB4011iGS+5HacQ2HnD-IN]
   os_family: routeros
   capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
 - model: MikroTik RB750Gr3
@@ -11,3 +13,33 @@
 - model: MikroTik RB962UiGS-5HacT2HnT
   os_family: routeros
   capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client, wifi.2ghz.ap, wifi.5ghz.ap]
+
+# Added for the real NetBox device types. Capabilities are CONSERVATIVE DEFAULTS, to be reviewed by the network owner.
+- model: MikroTik hEX
+  aliases: [hEX]
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik hEX PoE lite
+  aliases: [hEX PoE lite]
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik RB951G-2HnD
+  aliases: [RB951G-2HnD]
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client, wifi.2ghz.ap]
+- model: MikroTik RB433AH
+  aliases: [RB433AH]
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik CRS326-24G-2S+RM
+  aliases: [CRS326-24G-2S+RM]
+  os_family: routeros
+  capabilities: [dns.resolver, ntp.client]
+- model: MikroTik CCR1016-12S-1S+
+  aliases: [CCR1016-12S-1S+]
+  os_family: routeros
+  capabilities: [routing.ospf, dhcp.server, firewall, dns.resolver, ntp.client]
+- model: MikroTik LHG 60G
+  aliases: [LHG 60G]
+  os_family: routeros
+  capabilities: [wifi.60ghz.ap, wifi.60ghz.sta, dns.resolver, ntp.client]

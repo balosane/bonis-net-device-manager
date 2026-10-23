@@ -57,6 +57,20 @@ later be only the transport that runs an approved plan.
   param is type-checked against the feature (`ip`, `str`, `int`, `bool`, `list`; trailing `?` = optional).
 - `templates.dns_intents()` converts `ok` results of intent `dns` into `intents.Dns`; no other mapping exists yet. Nothing here applies anything.
 
+## NetBox inventory (`netbox.py`, `inventory.py`, `reconcile.py`; BONISISP-44 phase 1)
+
+- NetBox is the source of the device list and of the *desired* template/feature assignment (tags `tpl-*`, `feat-*`); git stays
+  the source of what a template means. Phase 1 is read-only: the client has GET only (no write method exists; the request builder
+  refuses any other method), `reconcile` writes only to `--emit DIR`, and it neither reads a device nor runs `plan`.
+- Pagination follows `next` but only its path and query are used, against the configured base URL (NetBox builds the link from
+  the Host header, which is wrong behind the SSH tunnel; this also keeps the token from going to another host). Redirects are not
+  followed. Missing device-type manufacturer and site region are resolved once per id and cached, only for managed devices.
+- A `feat-` tag becomes an in-memory one-feature template `feature:<name>`; real template names cannot contain `:`.
+- Problems (unknown model, no IP, unknown tag, placeholder) are collected per device instead of aborting the run; a per-device
+  compile error (e.g. a required param missing in every layer) is also a problem.
+- Not done: writing tags/status back to NetBox, reading capabilities from NetBox device types, vars checks for NetBox-derived
+  region/site/role names.
+
 ## Ansible module for airOS (`bonis.netdev.airos_cfg`)
 
 - **Why a module**: the plan's airOS change step is `base` hash + key/value pairs. Ansible only transports it; the logic

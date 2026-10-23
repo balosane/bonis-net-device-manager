@@ -130,6 +130,28 @@ Per (device, feature) the result is `ok` (capabilities present and a driver impl
 missing: error, exit 1) or `n/a` (no driver for that OS family: skipped with a reason, never an error). Unknown tag, template or model
 and two features of one domain on one device are errors (exit 1). Offline: nothing is read from or sent to a device.
 
+## NetBox inventory (BONISISP-44, phase 1, read-only)
+
+The device inventory for template compilation can come from NetBox instead of `config/devices.yml`. A NetBox tag is the
+**desired state only**: `tpl-<template>` selects a template from git, `feat-<feature>` adds one feature (details in
+[config/README.md](config/README.md)). This phase never writes to NetBox or to a device and never runs a plan.
+
+```bash
+export NETBOX_TOKEN=...            # the token is read from this variable, never from argv
+netdev reconcile --netbox http://127.0.0.1:28080 --token-env NETBOX_TOKEN --host-header ipam2.skamanet.cz   # via the SSH tunnel
+netdev reconcile ... --json                       # machine-readable matrix + problems
+netdev reconcile ... --emit out/                  # dns intent + targets for `netdev plan` (out/ must not exist or be empty)
+```
+
+Prints the device x feature matrix, then the devices with problems (unknown model, no `primary_ip4`, unknown tag, a
+placeholder/Generic device carrying a tag) and the number of untagged (unmanaged) devices. Exit 1 on any `invalid` result,
+problem, config error or NetBox error. `--token-kind token` selects the v1 `Token` header (default `bearer`, v2 tokens).
+`--emit` writes `dns-intent.yml` + `targets.yml` (or `dns-<n>.yml` + `targets-<n>.yml` per distinct DNS intent) and `index.yml`;
+you then run `netdev plan` yourself. The client (`bonis_netdev/netbox.py`) has GET only.
+
+**Honest note:** the tests use an in-process fake NetBox; the real NetBox has not been used. A live read-only check
+(`netdev reconcile` against the tunnel) is a separate manual step.
+
 ## Layout
 
 ```
@@ -141,6 +163,9 @@ bonis_netdev/transport.py   read-only SSH transport, fake transport for tests
 bonis_netdev/features.py    feature YAML, ConfigError
 bonis_netdev/catalog.py     model catalog
 bonis_netdev/templates.py   templates, layered vars, capability check
+bonis_netdev/netbox.py      read-only NetBox REST client (GET only)
+bonis_netdev/inventory.py   NetBox devices + tags -> templates.Device
+bonis_netdev/reconcile.py   netdev reconcile
 config/                     seed features, models, templates, vars, devices
 bonis_netdev/cli.py         netdev plan | show | check | check-templates
 
@@ -160,4 +185,4 @@ Tests run against canned device output; they need no device and no network.
 ## Status and next steps
 
 See [docs/DESIGN.md](docs/DESIGN.md). Not built: write flags (the executor is the generated playbook, writes disabled), more intents (NTP, syslog,
-firmware upgrade), inventory from NetBox, CI pipeline for running plans. Plane: BONISISP-39.
+firmware upgrade), writing to NetBox, CI pipeline for running plans. Plane: BONISISP-39.
