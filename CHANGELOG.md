@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Ansible module `bonis.netdev.routeros_service` (BONISISP-47): enables/disables the plain API service of a RouterOS device over SSH
+  (`disabled`, `address` list with strict validation, drift guard `from_disabled`/`from_address`, check mode, diff). Write path
+  disabled by the code constant `WRITES_ENABLED = False`; deny-by-default command classifier (one read, one write shape); verify and
+  restore after a write. Tests use fakes only.
 - Renderer: every `api_info` task passes `hide_defaults: false`. Found by a live `--check` run on RouterOS 6.47.7: `api_info` hides values equal to the
   collection defaults (`secondary-ntp` 0.0.0.0, empty `servers`, `enabled` no), so the NTP precheck asserted a value that was not returned.
 - Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,

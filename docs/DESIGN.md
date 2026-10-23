@@ -182,3 +182,20 @@ the environment contains only PATH, HOME, LANG and ANSIBLE_CONFIG. `--check --di
 unsupported and unsafe. `verify-playbook` warns about hazard names next to the playbook (`--strict-dir` fails).
 
 - Trust boundary of `run-playbook`: the playbook is verified byte for byte, the collection code that runs it (`ansible/collections`, `--collections-path`) is not. A change to that code is write-capable and needs the owner's review while the write ban lasts.
+
+## RouterOS service module (`bonis.netdev.routeros_service`, BONISISP-47)
+
+On 10 of 21 routers the RouterOS API is off, so `api_modify` cannot reach them; turning the API on therefore has to use SSH. The
+module is intentionally not a command runner: it reads `/ip service print detail without-paging where name=api` and may write
+only `/ip service set [find name=api] disabled=(yes|no) address=<list>`. `[find name=api]` is a literal, so ssh, winbox, www, telnet,
+ftp and api-ssl cannot be reached. `api-ssl` is not supported because it needs a certificate.
+
+Safety layers, same as `airos_cfg`: (1) `WRITES_ENABLED = False` code constant, a reviewed commit lifts it, not config; check mode never writes;
+(2) `GuardedTransport` with a deny-by-default classifier (anchored regexes with `\Z`; `;`, newline, CR, backtick, `$(` and `{{` rejected first),
+so anything else raises `CommandRefused` before the wire; (3) address validation (canonical IPv4, prefix /24 or longer, no
+unspecified/loopback/multicast/reserved/broadcast, no duplicates, max 8; enabling requires a non-empty list so the API is never
+opened to the world); (4) drift guard `from_disabled`/`from_address` compared right after the read; (5) re-read after a write, restore
+of the previous values on mismatch (an empty previous list is restored as `address=""`, the only place that form is written),
+and a refusal before writing if the previous state cannot be expressed in the write shape. Comparison normalises `a.b.c.d` to `a.b.c.d/32`
+because RouterOS prints single hosts that way. Disabling without `address` keeps the current list (for a currently empty list the
+command carries `address=""`, i.e. no change to the restriction).
