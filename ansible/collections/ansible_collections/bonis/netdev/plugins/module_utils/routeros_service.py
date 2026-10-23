@@ -185,8 +185,9 @@ def parse_service(text):
     if len(rows) > 1:
         raise ServiceError("ambiguous: %d rows for service api in the device output" % len(rows))
     flags, kv, _ = rows[0]
-    if "I" in flags:
-        raise ServiceError("service api is flagged invalid (I) on the device; refusing to reason about it")
+    if "I" in flags and "X" not in flags:
+        # RouterOS sets I together with X on every disabled service; I alone is unexplained, so refuse
+        raise ServiceError("service api is flagged invalid (I) without being disabled (X); refusing to reason about it")
     if "disabled" in kv:
         if kv["disabled"] not in ("yes", "no", "true", "false"):
             raise ServiceError("unreadable disabled value in the device output")

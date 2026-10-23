@@ -48,6 +48,10 @@ V7_EMPTY = (
     ' 3    name="api" port=8728 address="" certificate=none max-sessions=20 vrf=main\n')
 V7_EMPTY_BARE = ' 3    name="api" port=8728 address= certificate=none\n'
 
+# verbatim real captures (trailing spaces included)
+REAL_V6_DISABLED_XI = 'Flags: X - disabled, I - invalid \n 0 XI name="api" port=8728 address="" \n'
+REAL_V7_ENABLED = 'Flags: X - disabled, I - invalid \n 0   name="api" port=8728 address="" vrf=main max-sessions=20 \n'
+
 GOOD = ["192.168.238.0/24"]
 
 
@@ -109,7 +113,7 @@ def test_parse(text, dis, addr):
     ("", "no row"),
     (' 0    name="ssh" port=22\n', "no row"),
     (V6_ENABLED + V6_ENABLED.split("\n", 1)[1], "ambiguous"),
-    (' 3 XI name="api" port=8728\n', "invalid"),
+    (' 3 I name="api" port=8728 address=""\n', "invalid"),
     ("bad command name\n", "no row"),
 ])
 def test_parse_failures(text, frag):
@@ -415,3 +419,17 @@ def test_module_runs_in_ansible_harness_if_available():
         assert out["diff"]["after"] == {"disabled": False, "address": GOOD}
     finally:
         sys.path.pop(0)
+
+
+def test_real_captures():
+    assert lib.parse_service(REAL_V6_DISABLED_XI) == {"disabled": True, "address": []}
+    assert lib.parse_service(REAL_V7_ENABLED) == {"disabled": False, "address": []}
+    with pytest.raises(lib.ServiceError, match="invalid"):
+        lib.parse_service(' 0 I name="api" port=8728 address="" \n')
+
+
+def test_real_disabled_row_enable_command(writes_on):
+    t = Fake(text=REAL_V6_DISABLED_XI, effect=device_effect)
+    r = lib.run_module(params(from_disabled=True, from_address=[]), False, t)
+    assert not r.get("failed") and r["changed"] is True
+    assert t.cmds[1] == "/ip service set [find name=api] disabled=no address=192.168.238.0/24"

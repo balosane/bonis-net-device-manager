@@ -199,3 +199,5 @@ of the previous values on mismatch (an empty previous list is restored as `addre
 and a refusal before writing if the previous state cannot be expressed in the write shape. Comparison normalises `a.b.c.d` to `a.b.c.d/32`
 because RouterOS prints single hosts that way. Disabling without `address` keeps the current list (for a currently empty list the
 command carries `address=""`, i.e. no change to the restriction).
+
+Parser note: RouterOS flags a disabled service `XI` (verified on real 6.x output), so `I` is only refused when `X` is absent. `address=""` parses as an empty list; extra keys (`vrf`, `max-sessions`) are ignored.

@@ -47,8 +47,7 @@ part of the fleet, so the API-based modules cannot reach those routers. Delibera
 - Drift guard: if `from_disabled` / `from_address` is given and the device differs (`from_address: []` = no restriction),
   the module fails with `changed: false` right after the read.
 - Returns `changed`, `msg`, `diff` (`before`/`after` with only `disabled` and `address` of `api`), `current`. Supports `check_mode` and `diff`.
-- Reads `/ip service print detail without-paging where name=api` (RouterOS 6.x and 7.x layouts); a missing, ambiguous or
-  invalid-flagged row is an error.
+- Reads `/ip service print detail without-paging where name=api` (RouterOS 6.x and 7.x layouts); a missing or ambiguous row, or an `I` flag without `X`, is an error (disabled services are flagged `XI`).
 - **Writes are disabled**: code constant `WRITES_ENABLED = False` in `plugins/module_utils/routeros_service.py`. A non-check run
   that would change the device fails naming the constant, after the read only. When enabled, exactly one command shape is ever
   written, `/ip service set [find name=api] disabled=(yes|no) address=<list>`, followed by a re-read; on verification failure the previous
