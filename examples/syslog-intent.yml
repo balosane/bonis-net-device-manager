@@ -1,0 +1,6 @@
+# Intent: every device sends its log to this syslog server (IPv4).
+# RouterOS: only an EXISTING logging action named `netdev-remote` is updated, otherwise the device is reported `unsupported`.
+intent: syslog
+host: 192.168.6.1
+port: 514
+reason: "wave1: pilot"

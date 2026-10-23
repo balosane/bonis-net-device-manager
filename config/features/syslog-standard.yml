@@ -1,0 +1,7 @@
+name: syslog-standard
+domain: syslog
+requires: [syslog.remote]
+params:
+  syslog_host: ip
+  syslog_port: int?    # default 514
+intent: syslog

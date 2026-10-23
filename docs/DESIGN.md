@@ -33,7 +33,7 @@ later be only the transport that runs an approved plan.
 
 ## Known limits
 
-- `dns` is the only intent. DHCP networks are not matched to their DHCP server; a network of a disabled server is still planned
+- Intents: `dns`, `ntp`, `syslog` (see "NTP and syslog" below). DHCP networks are not matched to their DHCP server; a network of a disabled server is still planned
   and the disabled servers are listed in `skipped`.
 - airOS: only the resolver scope; clearing a key (fewer servers than before) is reported as unsupported.
 - RouterOS output is parsed from `print detail`; tested on canned output and on a 21-router snapshot of the real fleet.
@@ -52,10 +52,28 @@ later be only the transport that runs an approved plan.
   one device are a compile error. `protect` is reserved for features whose removal will need break-glass.
 - Compile result per (device, feature): `invalid` if the model lacks a required capability (checked first, hard error),
   `n/a` if `Driver.implements` of the model's os_family lacks the feature (skipped with a reason), else `ok`. The implements table is
-  code next to the drivers, not YAML. `ntp-standard` is implemented by no driver yet.
+  code next to the drivers, not YAML. `ntp-standard` and `syslog-standard` are implemented by both drivers; `wifi-ap-5g` by none.
 - Params are resolved only for `ok` results: layers `global < region < site < role < device`, then the device's own `params`; each
   param is type-checked against the feature (`ip`, `str`, `int`, `bool`, `list`; trailing `?` = optional).
-- `templates.dns_intents()` converts `ok` results of intent `dns` into `intents.Dns`; no other mapping exists yet. Nothing here applies anything.
+- `templates.dns_intents()`, `ntp_intents()` and `syslog_intents()` convert `ok` results into `intents.Dns` / `Ntp` / `Syslog`. Nothing here applies anything.
+
+## NTP and syslog (BONISISP-46)
+
+- **Intents**: `Ntp(servers, reason)` (IPs or host names, validated with `fullmatch`, so a trailing newline is refused; the
+  characters are limited to `[A-Za-z0-9.-]`) and `Syslog(host, port=514, reason)` (canonical IPv4, port 1-65535).
+- **RouterOS NTP shape is chosen from the output**, not only the major version: `primary-ntp` present -> legacy shape (RouterOS 6
+  and 7 before 7.15: IPv4 only, at most 2 servers, host names would need `server-dns-names`, reported `unsupported`); `servers`
+  present -> list shape (7.15+). `parse.ros_print_map` reads `key: value` blocks (multi-line values are joined with `,`) as well
+  as `key=value` detail output. Recorded captures are in `samples.py` (RouterOS 6.47.7, 7.18.2/7.24.2, airOS 5.6.11).
+- **Rollback of NTP**: legacy shape always has one (`0.0.0.0` = unset); list shape has none when the old list was empty (noted).
+- **RouterOS syslog is deliberately narrow**: creating logging actions/rules is a risk while writes are banned and needs a
+  create-step design (open). Only an existing action `netdev-remote` with `target=remote` is updated; otherwise the device is
+  `unsupported` with that reason. Existing rules (e.g. action `remote`, prefix = host name) are never touched; rules for
+  `critical,error,warning,info -> netdev-remote` are part of that future create-step design.
+- **airOS**: only differing keys are set; `ntpclient.2.*` is created only when the intent has a second server (the module appends
+  missing keys). Fewer servers than configured (a stale `ntpclient.2.server`) is reported `unsupported`, as for DNS.
+- **Not implemented, candidate feature `timezone-standard`**: router MOR-N29-RT-1 has time-zone-name `manual` GMT+00:00, and
+  airOS APs report `system.timezone=GMT+12` with a date in 2019; NTP alone does not fix wrong zones.
 
 ## Ansible module for airOS (`bonis.netdev.airos_cfg`)
 
@@ -94,6 +112,8 @@ only the variables `netdev_user` / `netdev_pass`; the device address is the plan
 | `/ip dns set servers=A,B` | `community.routeros.api_modify` path `ip dns`, `handle_absent_entries/handle_entries_content: ignore` |
 | `/ip dhcp-server network set [find address=P] dns-server=A,B` | `api_info` + `assert` that P exists (api_modify would create it), then `api_modify` with `data: [{address: P, dns-server: A,B}]` |
 | RouterOS precheck / verify (reads) | `api_info` + `assert` against `expect`; verify tasks carry `when: not netdev_check_only` |
+| `/system ntp client set enabled=E primary-ntp=A secondary-ntp=B` / `... servers=A,B` | `api_modify` path `system ntp client` (`enabled` bool, singleton; `ignore` flags); read/verify via `api_info` + `assert` on the first row |
+| `/system logging action set [find name=netdev-remote] remote=IP remote-port=N` | `api_info` + `assert` that the action exists and has `target == remote` (api_modify would create it), then `api_modify` path `system logging action`, `data: [{name, target: remote, remote, remote-port}]` (`target` is a required key of the module for this path) |
 | `airos-cfg-set base=<sha256\|current> k=v ...` | `bonis.netdev.airos_cfg` (host, username, password, base, settings, state: present) |
 | airOS precheck | a GATE: `airos_cfg` with the plan's `base` hash and target settings, literal `check_mode: true` (also in apply mode), placed in the device block BEFORE the rescued group |
 | airOS verify | `airos_cfg` with `base: current` and the expected values, literal `check_mode: true`, then `assert not changed` |

@@ -2,15 +2,23 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 
-from ..intents import Dns, DhcpNetworks, Resolver
-from ..parse import ros_print_value, ros_records
+from ..intents import Dns, DhcpNetworks, Ntp, Resolver, Syslog
+from ..parse import ros_print_map, ros_print_value, ros_records
 from ..plan import DevicePlan, Step
 from .base import Driver
 
 NETWORKS = "/ip dhcp-server network print detail without-paging"
 SERVERS = "/ip dhcp-server print detail without-paging"
 DNS = "/ip dns print"
+NTP = "/system ntp client print"
+LOG_ACTIONS = "/system logging action print detail without-paging"
+LOG_ACTION_NAME = "netdev-remote"
+LOG_ACTION_ONE = f"/system logging action print detail without-paging where name={LOG_ACTION_NAME}"
+UNSET = "0.0.0.0"
+_V4 = re.compile(r"[0-9]{1,3}(\.[0-9]{1,3}){3}")
+_HOSTLIST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*(,[A-Za-z0-9][A-Za-z0-9.-]*)*")
 
 
 def _norm(servers: str | None) -> list[str]:
@@ -18,7 +26,7 @@ def _norm(servers: str | None) -> list[str]:
 
 
 class RouterOsDriver(Driver):
-    implements = frozenset({"dns-standard"})
+    implements = frozenset({"dns-standard", "ntp-standard", "syslog-standard"})
 
     def __init__(self, major: int):
         self.major = major
@@ -27,10 +35,20 @@ class RouterOsDriver(Driver):
     def read_commands(self, intent) -> list[str]:
         if isinstance(intent, Dns):
             return [DNS] if isinstance(intent.scope, Resolver) else [NETWORKS, SERVERS]
+        if isinstance(intent, Ntp):
+            return [NTP]
+        if isinstance(intent, Syslog):
+            return [LOG_ACTIONS]
         return []
 
     def plan(self, device, intent, live, host) -> DevicePlan:
         dp = DevicePlan(device, host, self.name, self.fingerprint(live))
+        if isinstance(intent, Ntp):
+            self._plan_ntp(dp, intent, live)
+            return dp
+        if isinstance(intent, Syslog):
+            self._plan_syslog(dp, intent, live)
+            return dp
         if not isinstance(intent, Dns):
             dp.unsupported.append(f"intent {type(intent).__name__} is not supported by {self.name}")
             return dp
@@ -93,3 +111,105 @@ class RouterOsDriver(Driver):
                 Step("verify", f"/ip dhcp-server network print detail without-paging where address={addr}",
                      f"{addr}: dns-server must be {want}", expect=f"dns-server={want}"),
             ]
+
+    # ---------------------------------------------------------------- NTP client
+    def _plan_ntp(self, dp, intent: Ntp, live):
+        """Two shapes, chosen by what the device prints (not by the major version alone): RouterOS 6 and 7 before 7.15
+        have primary-ntp/secondary-ntp (IPv4 only, at most two); 7.15+ have `servers` (IP addresses or host names)."""
+        p = ros_print_map(live[NTP])
+        enabled = p.get("enabled", "").lower()
+        if enabled not in ("yes", "no"):
+            dp.unsupported.append(f"cannot read `enabled` from {NTP!r}; is the ntp package installed?")
+            return
+        if p.get("mode", "unicast") != "unicast":
+            dp.notes.append(f"NTP mode is {p['mode']!r}; servers are only used in unicast mode and the mode is not changed")
+        if "primary-ntp" in p:
+            self._ntp_legacy(dp, intent, p, enabled)
+        elif "servers" in p:
+            self._ntp_servers(dp, intent, p, enabled)
+        else:
+            dp.unsupported.append("NTP client output has neither primary-ntp nor servers; unknown RouterOS layout")
+
+    def _ntp_steps(self, dp, set_new, set_old, expect_old, expect_new, label_old, label_new):
+        dp.steps += [
+            Step("precheck", NTP, "re-read the NTP client; it must still hold the planned old values", expect=expect_old),
+            Step("change", set_new, f"NTP client {label_old} -> {label_new}", rollback=set_old),
+            Step("verify", NTP, "NTP client must hold the new values", expect=expect_new),
+        ]
+
+    def _ntp_legacy(self, dp, intent, p, enabled):
+        if len(intent.servers) > 2:
+            dp.unsupported.append(f"this RouterOS NTP client holds 2 servers (primary-ntp, secondary-ntp), intent has {len(intent.servers)}")
+            return
+        for s in intent.servers:
+            try:
+                ipaddress.IPv4Address(s)
+            except ValueError:
+                dp.unsupported.append(f"this RouterOS NTP client takes IPv4 addresses only (primary-ntp), not {s!r}; "
+                                      "host names would need server-dns-names, which is not planned yet")
+                return
+        want_p = intent.servers[0]
+        want_s = intent.servers[1] if len(intent.servers) > 1 else UNSET
+        have_p = p.get("primary-ntp") or UNSET
+        have_s = p.get("secondary-ntp") or UNSET
+        if not (_V4.fullmatch(have_p) and _V4.fullmatch(have_s)):
+            dp.unsupported.append(f"current NTP values {have_p!r}/{have_s!r} are not IPv4 addresses; refusing to plan a rollback")
+            return
+        if p.get("server-dns-names"):
+            dp.notes.append(f"server-dns-names={p['server-dns-names']} is set and is not changed")
+        if enabled == "yes" and (have_p, have_s) == (want_p, want_s):
+            dp.unchanged.append(f"ntp primary-ntp={have_p} secondary-ntp={have_s}")
+            return
+        self._ntp_steps(
+            dp, f"/system ntp client set enabled=yes primary-ntp={want_p} secondary-ntp={want_s}",
+            f"/system ntp client set enabled={enabled} primary-ntp={have_p} secondary-ntp={have_s}",
+            f"enabled={enabled} primary-ntp={have_p} secondary-ntp={have_s}", f"enabled=yes primary-ntp={want_p} secondary-ntp={want_s}",
+            f"enabled={enabled} {have_p},{have_s}", f"enabled=yes {want_p},{want_s}")
+
+    def _ntp_servers(self, dp, intent, p, enabled):
+        want = ",".join(intent.servers)
+        have = p.get("servers", "")
+        if have and not _HOSTLIST.fullmatch(have):
+            dp.unsupported.append(f"current NTP servers {have!r} contain characters outside [A-Za-z0-9.,-]; refusing to plan a rollback")
+            return
+        if enabled == "yes" and [x.strip().lower() for x in have.split(",") if x.strip()] == [x.lower() for x in intent.servers]:
+            dp.unchanged.append(f"ntp servers={have}")
+            return
+        if not have:
+            dp.notes.append("NTP servers were empty, so there is no automatic rollback value")
+        self._ntp_steps(
+            dp, f"/system ntp client set enabled=yes servers={want}",
+            f"/system ntp client set enabled={enabled} servers={have}" if have else None,
+            f"enabled={enabled} servers={have}", f"enabled=yes servers={want}",
+            f"enabled={enabled} servers={have or '(none)'}", f"enabled=yes servers={want}")
+
+    # ---------------------------------------------------------------- syslog
+    def _plan_syslog(self, dp, intent: Syslog, live):
+        """Only an EXISTING logging action named netdev-remote is updated. Creating actions or rules is a risk that is
+        not taken while writes are banned, and existing rules (e.g. action `remote`, prefix = host name) are never touched."""
+        act = next((r for r in ros_records(live[LOG_ACTIONS]) if r.get("name") == LOG_ACTION_NAME), None)
+        if act is None:
+            dp.unsupported.append(f"logging action {LOG_ACTION_NAME!r} does not exist; creation of logging actions/rules is not "
+                                  "supported while writes are banned; needs the create-step design")
+            return
+        if act.get("target") != "remote":
+            dp.unsupported.append(f"logging action {LOG_ACTION_NAME!r} has target={act.get('target')!r}, not remote; not touched")
+            return
+        have_h = act.get("remote") or UNSET
+        have_p = act.get("remote-port") or "514"
+        if not (_V4.fullmatch(have_h) and re.fullmatch(r"[0-9]{1,5}", have_p)):
+            dp.unsupported.append(f"current action values remote={have_h!r} remote-port={have_p!r} are not plain; refusing to plan a rollback")
+            return
+        if (have_h, have_p) == (intent.host, str(intent.port)):
+            dp.unchanged.append(f"logging action {LOG_ACTION_NAME} remote={have_h} remote-port={have_p}")
+            return
+        find = f"[find name={LOG_ACTION_NAME}]"
+        dp.steps += [
+            Step("precheck", LOG_ACTION_ONE, "re-read the action; it must still hold the planned old values",
+                 expect=f"remote={have_h} remote-port={have_p}"),
+            Step("change", f"/system logging action set {find} remote={intent.host} remote-port={intent.port}",
+                 f"logging action {LOG_ACTION_NAME} remote {have_h}:{have_p} -> {intent.host}:{intent.port}",
+                 rollback=f"/system logging action set {find} remote={have_h} remote-port={have_p}"),
+            Step("verify", LOG_ACTION_ONE, "the action must hold the new values",
+                 expect=f"remote={intent.host} remote-port={intent.port}"),
+        ]

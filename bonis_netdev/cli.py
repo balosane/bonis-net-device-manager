@@ -20,16 +20,35 @@ from concurrent.futures import ThreadPoolExecutor
 import yaml
 
 from .drivers.base import build_device_plan, detect_driver
-from .intents import DhcpNetworks, Dns, IntentError, Resolver
+from .intents import DhcpNetworks, Dns, IntentError, Ntp, Resolver, Syslog
 from .plan import DevicePlan, Plan
 from .transport import SshReadTransport
 
 
-def load_intent(path: str) -> Dns:
+def load_intent(path: str) -> Dns | Ntp | Syslog:
+    """`intent: dns | ntp | syslog`; unknown keys of ntp/syslog are an error so a typo cannot silently change the meaning."""
     with open(path, encoding="utf-8") as f:
         d = yaml.safe_load(f) or {}
-    if d.get("intent") != "dns":
-        raise IntentError(f"{path}: only `intent: dns` exists in the prototype")
+    if not isinstance(d, dict):
+        raise IntentError(f"{path}: expected a mapping")
+    kind = d.get("intent")
+    keys = {"dns": {"intent", "primary", "secondary", "extra", "scope", "reason"},
+            "ntp": {"intent", "servers", "reason"},
+            "syslog": {"intent", "host", "port", "reason"}}
+    if kind not in keys:
+        raise IntentError(f"{path}: `intent` must be one of {', '.join(sorted(keys))}, got {kind!r}")
+    unknown = sorted(set(d) - keys[kind])
+    if unknown and kind != "dns":      # dns files keep their historic leniency
+        raise IntentError(f"{path}: unknown field {', '.join(map(str, unknown))} for intent {kind}")
+    if kind == "ntp":
+        servers = d.get("servers")
+        if not isinstance(servers, list):
+            raise IntentError(f"{path}: servers must be a list")
+        return Ntp(servers=tuple(servers), reason=d.get("reason", ""))
+    if kind == "syslog":
+        if "host" not in d:
+            raise IntentError(f"{path}: host is required")
+        return Syslog(host=d["host"], port=d.get("port", 514), reason=d.get("reason", ""))
     sc = d.get("scope") or {"kind": "resolver"}
     if sc.get("kind") == "dhcp-networks":
         scope = DhcpNetworks(exclude=tuple(sc.get("exclude") or ()))
@@ -234,6 +253,14 @@ def cmd_selftest(a) -> int:
     check("a plan edited by hand no longer matches its plan_id",
           lambda: hashlib.sha256(body.replace("192.168.238.119", "9.9.9.9", 1).encode()).hexdigest() != doc["plan_id"])
     check("the plan says writes are not allowed", lambda: doc["writes_allowed"] is False)
+    check("NTP set with an injected host name is not classified",
+          lambda: all(effect_of(c) == Effect.UNKNOWN for c in (
+              "/system ntp client set enabled=yes servers=a.example;/system reboot",
+              "/system ntp client set enabled=yes servers=a.example`id`",
+              "/system ntp client set enabled=yes servers={{x}}")))
+    check("a missing netdev-remote logging action is reported unsupported, never created",
+          lambda: (lambda dp: dp.steps == [] and "creation" in dp.unsupported[0])(
+              build_device_plan(RouterOsDriver(7), "r", Syslog("192.168.6.1"), samples.ros_syslog_transport(samples.LOG_ACTIONS))))
     print(f"\n{sum(results)}/{len(results)} checks passed")
     return 0 if all(results) else 1
 

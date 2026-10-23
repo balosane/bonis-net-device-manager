@@ -1,0 +1,6 @@
+# Intent: every device uses these NTP servers (IP addresses or host names; RouterOS before 7.15 takes IPv4 only, at most 2).
+intent: ntp
+servers:
+  - 192.168.6.1
+  - 195.113.144.201
+reason: "wave1: pilot"

@@ -80,10 +80,31 @@ class Ntp:
         if not self.servers:
             raise IntentError("servers: at least one NTP server is required")
         for s in self.servers:
-            if not _HOST_RE.match(s):
+            if not isinstance(s, str) or not _HOST_RE.fullmatch(s):   # fullmatch: `$` would accept a trailing newline
                 raise IntentError(f"servers: {s!r} is not an IP address or host name")
         if len({s.lower() for s in self.servers}) != len(self.servers):
             raise IntentError(f"duplicate NTP server in {self.servers}")
 
     def as_dict(self):
         return {"intent": "ntp", "servers": list(self.servers), "reason": self.reason}
+
+
+@dataclass(frozen=True)
+class Syslog:
+    """Send the device's log to one remote syslog server (IPv4)."""
+    host: str
+    port: int = 514
+    reason: str = ""
+
+    def __post_init__(self):
+        try:
+            ok = isinstance(self.host, str) and ipaddress.ip_address(self.host).version == 4
+        except ValueError:
+            ok = False
+        if not ok or str(ipaddress.ip_address(self.host)) != self.host:
+            raise IntentError(f"host: {self.host!r} is not a canonical IPv4 address")
+        if isinstance(self.port, bool) or not isinstance(self.port, int) or not 1 <= self.port <= 65535:
+            raise IntentError(f"port: {self.port!r} is not a port number (1-65535)")
+
+    def as_dict(self):
+        return {"intent": "syslog", "host": self.host, "port": self.port, "reason": self.reason}

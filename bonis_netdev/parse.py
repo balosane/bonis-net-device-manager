@@ -27,6 +27,37 @@ def ros_print_value(text: str, key: str) -> str | None:
     return m.group(1).strip() if m else None
 
 
+_PRINT_KEY = re.compile(r"^\s*([\w-]+):(?:\s+(.*))?$")
+
+
+def ros_print_map(text: str) -> dict[str, str]:
+    """Singleton `print` / `print detail` -> {key: value}, tolerant of both layouts.
+
+    `key: value` lines (a value may continue on following indented lines without a key, e.g. the RouterOS 7
+    `servers:` list; continuation lines are joined with `,`) and `key=value` tokens (also quoted values). An IPv6
+    continuation line such as `2001:db8::1` is not mistaken for a key because a key colon is followed by a space."""
+    out: dict[str, str] = {}
+    last = None
+    for line in text.splitlines():
+        if not line.strip():
+            last = None
+            continue
+        m = _PRINT_KEY.match(line)
+        if m:
+            last = m.group(1)
+            out[last] = (m.group(2) or "").strip()
+            continue
+        body = ENTRY.sub("", line, count=1).strip() if ENTRY.match(line) else line.strip()
+        pairs = KV.findall(body)
+        if pairs:
+            for k, v in pairs:
+                out[k] = v.strip().strip('"')
+            last = None
+        elif last is not None and line[0].isspace():
+            out[last] = f"{out[last]},{body}" if out[last] else body
+    return out
+
+
 def cfg_parse(text: str) -> dict[str, str]:
     cfg = {}
     for line in text.splitlines():

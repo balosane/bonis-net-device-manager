@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- Features `ntp-standard` and `syslog-standard` end to end (BONISISP-46): intent `Syslog` (`Ntp` unchanged, now validated with
+  `fullmatch`), RouterOS 6/7 and airOS drivers, three new RouterOS write shapes in `classify.py` (NTP legacy, NTP list,
+  update of the existing `netdev-remote` logging action), renderer mappings (`api_modify` paths `system ntp client` and
+  `system logging action`; airOS via `airos_cfg`), `parse.ros_print_map`, `load_intent` for `ntp`/`syslog`, `ntp_intents`/`syslog_intents`,
+  seed capability `syslog.remote`, golden files `ntp.playbook.yml` / `syslog.playbook.yml`, two more `selftest` checks (14).
+  RouterOS syslog reports `unsupported` when `netdev-remote` does not exist (no creation while writes are banned).
 - Third review fix: `netdev run-playbook` (`render/runner.py`) is the only supported executor: single read + verify of the bytes,
   fresh empty temp dir with controller-owned `ansible.cfg`/`inventory.ini`, scrubbed environment, credentials via a 0600 vars file,
   always `--check --diff`, `RUN_APPLY_ENABLED = False`. `verify-playbook` warns (`--strict-dir` fails) on host_vars/, group_vars/,

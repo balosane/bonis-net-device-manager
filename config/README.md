@@ -12,3 +12,8 @@
   `ConfigError` naming the file, the layer and the key.
 - If `vars/region.yml`, `site.yml` or `role.yml` exists, every region/site/role a device names must be a key of it (use `name: {}`
   for "no overrides"). A device that leaves the field unset, or a layer whose file does not exist, is not checked.
+
+## Seed features
+
+`dns-standard`, `ntp-standard` (param `servers`), `syslog-standard` (params `syslog_host`, `syslog_port?`; capability
+`syslog.remote`) are implemented by the RouterOS and airOS drivers; `wifi-ap-5g` has no driver (`n/a`).

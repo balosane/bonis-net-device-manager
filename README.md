@@ -27,7 +27,7 @@ pip install .                 # Python 3.10+, installs the `netdev` command
 ## Try it in two minutes
 
 ```bash
-netdev selftest                 # 12 safety checks on fake devices: no network, no credentials
+netdev selftest                 # 14 safety checks on fake devices: no network, no credentials
 netdev demo                     # a sample plan for a fake router and a fake AP
 ```
 
@@ -53,6 +53,9 @@ netdev show  plan.json          # what would change, per device, with rollback
 netdev check plan.json          # exit 2 if the plan was edited after it was created
 ```
 
+Intent files: `intent: dns` (`examples/dns-intent.yml`), `intent: ntp` (`examples/ntp-intent.yml`, `servers:` list of IPs or host names)
+and `intent: syslog` (`examples/syslog-intent.yml`, `host:` IPv4, `port:` default 514). `netdev plan --intent` picks the planner by that key.
+
 `netdev plan` exits 1 if any device could not be read; that device carries an `error` in the plan and the others are still planned.
 
 ### What a plan looks like
@@ -68,6 +71,15 @@ For RouterOS a change is a targeted `set` on the item that was found, guarded by
 For airOS the running config is the flat file `/tmp/system.cfg`. The plan never contains a copy of it (it holds the wireless
 PSK and password hashes). It holds `airos-cfg-set base=<sha256 of the file> key=value ...`: an executor must re-read the file,
 refuse if the hash differs, replace exactly those keys in the whole file, and write the whole file back. A partial file is never written.
+
+### NTP and syslog (BONISISP-46)
+
+| | RouterOS | airOS |
+|---|---|---|
+| `ntp-standard` | `/system ntp client set enabled=yes primary-ntp=A secondary-ntp=B` (6.x and 7.x before 7.15; IPv4 only, max 2, `0.0.0.0` = unset) or `... servers=A,B` (7.15+; IPs or host names). The shape follows what `/system ntp client print` shows. | keys `ntpclient.N.server`, `ntpclient.N.status`, `ntpclient.status` (max 2 servers; host names allowed; only differing keys are set; the `airos_cfg` module appends keys missing from the file) |
+| `syslog-standard` | `/system logging action set [find name=netdev-remote] remote=IP remote-port=N`: updates an EXISTING action only. If it does not exist the device is reported `unsupported` (creating actions/rules is not supported while writes are banned). Logging rules are never touched. | keys `syslog.remote.ip`, `syslog.remote.port`, `syslog.remote.status`, `syslog.status` |
+
+A device that already holds the intent goes to `unchanged`, as with DNS.
 
 ## Ansible module for airOS
 
@@ -159,5 +171,4 @@ Tests run against canned device output; they need no device and no network.
 
 ## Status and next steps
 
-See [docs/DESIGN.md](docs/DESIGN.md). Not built: write flags (the executor is the generated playbook, writes disabled), more intents (NTP, syslog,
-firmware upgrade), inventory from NetBox, CI pipeline for running plans. Plane: BONISISP-39.
+See [docs/DESIGN.md](docs/DESIGN.md). Not built: write flags (the executor is the generated playbook, writes disabled), more intents (timezone, firmware upgrade), inventory from NetBox, CI pipeline for running plans. Plane: BONISISP-39.

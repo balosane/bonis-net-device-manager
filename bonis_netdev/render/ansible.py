@@ -59,6 +59,15 @@ _AIROS_SET = re.compile(r"^airos-cfg-set base=([0-9a-f]{64}|current)((?: [a-z0-9
 _ROS_DNS_READ = re.compile(r"^/ip dns print$")
 _ROS_NET_READ = re.compile(r"^/ip dhcp-server network print detail without-paging where address=([0-9./]+)$")
 _ROS_PLAIN_READ = re.compile(r"^/([a-z0-9 /-]+?) print(?: detail)?(?: without-paging)?$", re.I)
+_V4 = r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}"
+_HOSTS = r"[A-Za-z0-9][A-Za-z0-9.-]*(?:,[A-Za-z0-9][A-Za-z0-9.-]*)*"
+_ROS_NTP_LEGACY_SET = re.compile(rf"^/system ntp client set enabled=(yes|no) primary-ntp=({_V4}) secondary-ntp=({_V4})$")
+_ROS_NTP_LIST_SET = re.compile(rf"^/system ntp client set enabled=(yes|no) servers=({_HOSTS})$")
+_ROS_NTP_READ = re.compile(r"^/system ntp client print$")
+_ROS_LOG_SET = re.compile(rf"^/system logging action set \[find name=netdev-remote\] remote=({_V4}) remote-port=([0-9]{{1,5}})$")
+_ROS_LOG_READ = re.compile(r"^/system logging action print detail without-paging where name=netdev-remote$")
+_NTP_EXPECT = re.compile(rf"enabled=(yes|no)(?: primary-ntp=({_V4}) secondary-ntp=({_V4})| servers=({_HOSTS}))")
+_LOG_EXPECT = re.compile(rf"remote=({_V4}) remote-port=([0-9]{{1,5}})")
 _AIROS_READ = "cat /tmp/system.cfg"
 _HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
 
@@ -174,6 +183,33 @@ def _render_update(ctx: _Ctx, command: str, purpose: str, kind: str, verb: str) 
                      {**ctx.conn(), "path": "ip dhcp-server network",
                       "data": [{"address": addr, "dns-server": servers}], **_IGNORE}),
         ]
+    if kind == "routeros" and (m := _ROS_NTP_LEGACY_SET.match(command)):
+        en, prim, sec = m.groups()
+        return [ctx.task(f"{verb} {purpose}", M_MODIFY,
+                         {**ctx.conn(), "path": "system ntp client",
+                          "data": [{"enabled": en == "yes", "primary-ntp": prim, "secondary-ntp": sec}], **_IGNORE})]
+    if kind == "routeros" and (m := _ROS_NTP_LIST_SET.match(command)):
+        en, servers = m.groups()
+        return [ctx.task(f"{verb} {purpose}", M_MODIFY,
+                         {**ctx.conn(), "path": "system ntp client",
+                          "data": [{"enabled": en == "yes", "servers": servers}], **_IGNORE})]
+    if kind == "routeros" and (m := _ROS_LOG_SET.match(command)):
+        remote, port = m.group(1), int(m.group(2))
+        if not 1 <= port <= 65535:
+            raise RenderError(f"{d}: remote-port {port} is not a port number")
+        reg = ctx.var()
+        sel = f"{reg}.result | selectattr('name', 'equalto', 'netdev-remote') | list"
+        return [
+            # api_modify would CREATE a missing action; creating logging actions is not supported, so require it to exist
+            ctx.task(f"{verb} netdev-remote: read logging actions", M_INFO, {**ctx.conn(), "path": "system logging action"}, register=reg),
+            _assert(ctx, f"{verb} netdev-remote: action must exist with target remote",
+                    [f"({sel}) | length == 1", f"((({sel}) | first).target | default('')) == 'remote'"],
+                    f"{d}: logging action netdev-remote does not exist or its target is not remote; refusing to create or change it"),
+            # `target` is a required key of the module for this path; the assert above guarantees it is the existing value
+            ctx.task(f"{verb} {purpose}", M_MODIFY,
+                     {**ctx.conn(), "path": "system logging action",
+                      "data": [{"name": "netdev-remote", "target": "remote", "remote": remote, "remote-port": port}], **_IGNORE}),
+        ]
     if kind == "airos" and (m := _AIROS_SET.match(command)):
         base, rest = m.groups()
         settings = dict(kv.split("=", 1) for kv in rest.split())
@@ -227,6 +263,35 @@ def _render_read(ctx: _Ctx, step: Step, kind: str, verify: bool) -> list[dict]:
         else:
             msg = f"{d}: DHCP network {addr} does not exist"
         tasks.append(_assert(ctx, f"{step.purpose}: value", [cond], msg, verify))
+        return tasks
+    if _ROS_NTP_READ.match(cmd):
+        tasks = [ctx.task(f"{step.purpose}", M_INFO, {**ctx.conn(), "path": "system ntp client"}, register=reg, verify=verify)]
+        if step.expect is not None:
+            m = _NTP_EXPECT.fullmatch(step.expect)
+            if not m:
+                raise RenderError(f"{d}: cannot render expect {step.expect!r} of step {cmd!r}")
+            en, prim, sec, servers = m.groups()
+            first = f"({reg}.result | first)"
+            conds = [f"({first}.enabled | default(false) | bool) == {'true' if en == 'yes' else 'false'}"]
+            if servers is None:
+                conds += [f"({first}['primary-ntp'] | default('') | string) == '{prim}'",
+                          f"({first}['secondary-ntp'] | default('') | string) == '{sec}'"]
+            else:
+                conds.append(f"({first}.servers | default('') | string) == '{servers}'")
+            tasks.append(_assert(ctx, f"{step.purpose}: value", conds, f"{d}: NTP client does not hold {step.expect}", verify))
+        return tasks
+    if _ROS_LOG_READ.match(cmd):
+        sel = f"{reg}.result | selectattr('name', 'equalto', 'netdev-remote') | list"
+        tasks = [ctx.task(f"{step.purpose}", M_INFO, {**ctx.conn(), "path": "system logging action"}, register=reg, verify=verify)]
+        conds = [f"({sel}) | length == 1"]
+        if step.expect is not None:
+            m = _LOG_EXPECT.fullmatch(step.expect)
+            if not m:
+                raise RenderError(f"{d}: cannot render expect {step.expect!r} of step {cmd!r}")
+            first = f"(({sel}) | first)"
+            conds += [f"({first}.target | default('')) == 'remote'", f"({first}.remote | default('') | string) == '{m.group(1)}'",
+                      f"({first}['remote-port'] | default('') | string) == '{m.group(2)}'"]
+        tasks.append(_assert(ctx, f"{step.purpose}: value", conds, f"{d}: logging action netdev-remote does not hold {step.expect or 'its planned state'}", verify))
         return tasks
     if m := _ROS_PLAIN_READ.match(cmd):
         if step.expect is not None:
