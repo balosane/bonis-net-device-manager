@@ -1,4 +1,4 @@
 # A template is an unordered list of feature tags. A device may have several; they are merged.
-core-router: [dns-standard, ntp-standard]
-ptp-radio: [ntp-standard]
-ap-5g: [wifi-ap-5g, ntp-standard]
+core-router: [dns-standard, ntp-standard, syslog-standard]
+ptp-radio: [ntp-standard, syslog-standard]
+ap-5g: [wifi-ap-5g, ntp-standard, syslog-standard]

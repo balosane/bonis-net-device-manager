@@ -86,7 +86,7 @@ def test_ok_invalid_na(conf):
     st = status(compile_config(load_config(conf(devices=d))))
     assert st[("r", "dns-standard")] == ("ok", "")
     assert st[("r", "wifi-ap-5g")] == ("invalid", "R lacks capability wifi.5ghz.ap")
-    assert st[("r", "ntp-standard")] == ("n/a", "driver not implemented")
+    assert st[("r", "ntp-standard")] == ("ok", "")      # implemented since BONISISP-46
     assert st[("a", "wifi-ap-5g")] == ("n/a", "driver not implemented")
 
 

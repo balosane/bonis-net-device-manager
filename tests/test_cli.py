@@ -51,7 +51,7 @@ def test_plan_command_reports_unreachable_device(tmp_path, monkeypatch):
 
 def test_selftest_and_demo_pass(capsys):
     assert cli.main(["selftest"]) == 0
-    assert "12/12 checks passed" in capsys.readouterr().out
+    assert "14/14 checks passed" in capsys.readouterr().out
     assert cli.main(["demo"]) == 0
     out = capsys.readouterr().out
     assert "DEMO-ROUTER" in out and "plan_id" in out and "SuperSecretPsk" not in out

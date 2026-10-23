@@ -8,18 +8,19 @@ from __future__ import annotations
 
 import hashlib
 
-from ..intents import Dns, Resolver
+from ..intents import Dns, Ntp, Resolver, Syslog
 from ..parse import cfg_parse
 from ..plan import DevicePlan, Step
 from .base import Driver
 
 CFG = "cat /tmp/system.cfg"
 DNS_KEYS = ("resolv.nameserver.1.ip", "resolv.nameserver.2.ip")
+NTP_SERVER_KEYS = ("ntpclient.1.server", "ntpclient.2.server")
 
 
 class AirosDriver(Driver):
     name = "airos"
-    implements = frozenset({"dns-standard"})
+    implements = frozenset({"dns-standard", "ntp-standard", "syslog-standard"})
 
     def read_commands(self, intent) -> list[str]:
         return [CFG]
@@ -29,24 +30,68 @@ class AirosDriver(Driver):
         base = hashlib.sha256(text.encode()).hexdigest()
         # the fingerprint is the hash only: nothing from the file is kept in the plan
         dp = DevicePlan(device, host, self.name, base)
-        if not isinstance(intent, Dns):
+        cfg = cfg_parse(text)
+        if isinstance(intent, Ntp):
+            self._plan_ntp(dp, intent, cfg, base)
+        elif isinstance(intent, Syslog):
+            self._plan_keys(dp, cfg, base, {
+                "syslog.remote.ip": intent.host, "syslog.remote.port": str(intent.port),
+                "syslog.remote.status": "enabled", "syslog.status": "enabled"},
+                f"syslog {intent.host}:{intent.port}", gated={"syslog.remote.ip": "syslog.remote.status",
+                                                              "syslog.remote.port": "syslog.remote.status"})
+        elif isinstance(intent, Dns):
+            self._plan_dns(dp, intent, cfg, base)
+        else:
             dp.unsupported.append(f"intent {type(intent).__name__} is not supported by airos")
-            return dp
+        return dp
+
+    def _plan_ntp(self, dp, intent, cfg, base):
+        """Keys ntpclient.N.server (+ .status), ntpclient.status. The airos_cfg module appends keys that are missing
+        from the file, so ntpclient.2.* is created only when the intent has a second server."""
+        if len(intent.servers) > len(NTP_SERVER_KEYS):
+            dp.unsupported.append(f"airOS NTP client holds {len(NTP_SERVER_KEYS)} servers, intent has {len(intent.servers)}")
+            return
+        want = {"ntpclient.status": "enabled"}
+        for i, srv in enumerate(intent.servers, 1):
+            want[f"ntpclient.{i}.server"] = srv
+            want[f"ntpclient.{i}.status"] = "enabled"
+        stale = [k for k in NTP_SERVER_KEYS[len(intent.servers):] if cfg.get(k)]
+        if stale:
+            dp.unsupported.append(f"{stale} would stay set; clearing a key is not planned yet")
+        self._plan_keys(dp, cfg, base, want, "ntp " + ",".join(intent.servers),
+                        gated={f"ntpclient.{i}.server": f"ntpclient.{i}.status" for i in (1, 2)})
+
+    def _plan_dns(self, dp, intent, cfg, base):
         if not isinstance(intent.scope, Resolver):
             dp.unsupported.append("airOS has no DHCP server networks to change; use scope Resolver")
-            return dp
+            return
         if len(intent.servers) > len(DNS_KEYS):
             dp.unsupported.append(f"airOS resolver holds {len(DNS_KEYS)} servers, intent has {len(intent.servers)}")
-            return dp
-        cfg = cfg_parse(text)
+            return
         want = dict(zip(DNS_KEYS, intent.servers))
-        changes = {k: v for k, v in want.items() if cfg.get(k) != v}
         stale = [k for k in DNS_KEYS[len(intent.servers):] if cfg.get(k)]
         if stale:
             dp.unsupported.append(f"{stale} would stay set; clearing a key is not planned yet")
+        self._plan_keys(dp, cfg, base, want, "resolver " + ",".join(want.values()))
+
+    @staticmethod
+    def _plan_keys(dp, cfg, base, want, label, gated=None):
+        """`gated` maps a key to the status key that switches it on. A rollback restores only keys that had a value, so a
+        key CREATED by this change would stay behind; that is harmless only if the status key is back to a non-enabled
+        value after the rollback. That holds when the status key has a previous value other than `enabled` (the rollback
+        restores it). If the status key is `enabled` already, or has no previous value (the rollback cannot unset it), the
+        created key would stay active: the change is reported unsupported instead."""
+        changes = {k: v for k, v in want.items() if cfg.get(k) != v}
         if not changes:
-            dp.unchanged.append("resolver " + ",".join(want.values()))
-            return dp
+            dp.unchanged.append(label)
+            return
+        for key in sorted(changes):
+            status = (gated or {}).get(key)
+            if status and not cfg.get(key) and not (cfg.get(status) and cfg.get(status) != "enabled"):
+                why = "is already enabled" if cfg.get(status) else "has no previous value to restore"
+                dp.unsupported.append(f"{key} does not exist yet and {status} {why}: a rollback would leave {key} active "
+                                      "(rollback never deletes keys); not planned")
+                return
         unset = [k for k in changes if not cfg.get(k)]
         if unset:
             dp.notes.append(f"{', '.join(sorted(unset))} was unset; rollback restores only the keys that had a value")
@@ -60,4 +105,3 @@ class AirosDriver(Driver):
                  rollback=f"airos-cfg-set base=current {back}" if back else None),
             Step("verify", CFG, "system.cfg must hold the new values", expect=args),
         ]
-        return dp

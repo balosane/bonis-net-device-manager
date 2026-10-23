@@ -9,7 +9,7 @@ from pathlib import Path
 from .catalog import Model, load_models
 from .drivers.base import driver_class
 from .features import ConfigError, Feature, check_keys, check_param, documents, load_features, read_yaml, string_list, yaml_files, NAME_RE
-from .intents import DhcpNetworks, Dns, Resolver
+from .intents import DhcpNetworks, Dns, IntentError, Ntp, Resolver, Syslog
 
 OK, INVALID, NA = "ok", "invalid", "n/a"
 LAYERS = ("global", "region", "site", "role", "device")   # later layer wins
@@ -220,6 +220,31 @@ def dns_intents(results: list[Result]) -> list[tuple[str, Dns]]:
             raise ConfigError(f"device {r.device}: feature {r.feature}: scope {scope!r} must be resolver or dhcp-networks")
         out.append((r.device, Dns(p["primary"], p.get("secondary"), sc, tuple(p.get("extra", ())),
                                   reason=f"template feature {r.feature}")))
+    return out
+
+
+def ntp_intents(results: list[Result]) -> list[tuple[str, Ntp]]:
+    """(device, Ntp intent) for each ok `ntp` result."""
+    out = []
+    for r in results:
+        if r.status == OK and r.intent == "ntp":
+            try:
+                out.append((r.device, Ntp(tuple(r.params["servers"]), reason=f"template feature {r.feature}")))
+            except IntentError as e:
+                raise ConfigError(f"device {r.device}: feature {r.feature}: {e}") from None
+    return out
+
+
+def syslog_intents(results: list[Result]) -> list[tuple[str, Syslog]]:
+    """(device, Syslog intent) for each ok `syslog` result."""
+    out = []
+    for r in results:
+        if r.status == OK and r.intent == "syslog":
+            try:
+                out.append((r.device, Syslog(r.params["syslog_host"], r.params.get("syslog_port", 514),
+                                             reason=f"template feature {r.feature}")))
+            except IntentError as e:
+                raise ConfigError(f"device {r.device}: feature {r.feature}: {e}") from None
     return out
 
 

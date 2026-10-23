@@ -1,6 +1,18 @@
 # Changelog
 
 ## Unreleased
+- Renderer: every `api_info` task passes `hide_defaults: false`. Found by a live `--check` run on RouterOS 6.47.7: `api_info` hides values equal to the
+  collection defaults (`secondary-ntp` 0.0.0.0, empty `servers`, `enabled` no), so the NTP precheck asserted a value that was not returned.
+- Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,
+  multicast, broadcast/reserved, link-local; classify/renderer octets 0-255 and ports 1-65535; airOS refuses to create a key
+  that a rollback would leave active; explicit IPv6-NTP limit.
+- Features `ntp-standard` and `syslog-standard` end to end (BONISISP-46): intent `Syslog` (`Ntp` unchanged, now validated with
+  `fullmatch`), RouterOS 6/7 and airOS drivers, three new RouterOS write shapes in `classify.py` (NTP legacy, NTP list,
+  update of the existing `netdev-remote` logging action), renderer mappings (`api_modify` paths `system ntp client` and
+  `system logging action`; airOS via `airos_cfg`), `parse.ros_print_map`, `load_intent` for `ntp`/`syslog`, `ntp_intents`/`syslog_intents`,
+  seed capability `syslog.remote`, golden files `ntp.playbook.yml` / `syslog.playbook.yml`, two more `selftest` checks (14).
+  RouterOS syslog reports `unsupported` when `netdev-remote` does not exist (no creation while writes are banned).
+
 - NetBox inventory, phase 1, read-only (BONISISP-44): `netbox.py` (GET-only client), `inventory.py` (`devices_from_netbox`: tags
   `tpl-*` / `feat-*`), `reconcile.py` (`netdev reconcile [--json] [--emit DIR]`), model `aliases:` in the catalog, optional
   `Device.host`, `load_config(..., with_devices=False)`, `templates.format_matrix`. Tested against a fake NetBox only.
