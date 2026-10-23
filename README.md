@@ -90,6 +90,10 @@ applies the `airos-cfg-set` step of a plan (`base` hash + key/value settings) wi
 **Its write path is disabled** (`WRITES_ENABLED = False` in the module code); check mode is always read-only. See the
 collection README.
 
+`bonis.netdev.routeros_service` (BONISISP-47) enables/disables the plain RouterOS API service over SSH for routers whose API is
+off (`disabled`, `address` list, drift guard `from_disabled`/`from_address`). It reads one service row and is never a command
+runner; its write path is disabled the same way (`WRITES_ENABLED = False` in `module_utils/routeros_service.py`). See the collection README.
+
 ## Ansible executor
 
 Ansible is the primary executor; our own Python modules are the fallback where no Ansible module exists. The playbook is a
