@@ -683,3 +683,21 @@ def test_airos_mgmt_api_is_invalid_for_missing_capability(tmp_path):
     (tmp_path / "d.yml").write_text("ap: {model: Ubiquiti LHG-5, templates: [api-bootstrap]}\n")
     res = compile_config(load_config(SEED, tmp_path / "d.yml"))
     assert res[0].status == "invalid" and "lacks capability mgmt.api" in res[0].reason
+
+
+def test_driver_wrap_detection_uses_every_line_of_the_record():
+    text = ' 0 name="api" port=8728\n      address=10.0.0.1/32,10.0.0.2/32\n      ,10.0.0.3/32 vrf=main\n'
+    dp = planned(7, text)
+    assert dp.steps == [] and "wrapped" in dp.unsupported[0]
+    dp = planned(7, ' 0 name="api" port=8728\n      address=10.0.0.1/32 \n      vrf=main\n')    # documented false refusal
+    assert dp.steps == [] and dp.unsupported
+
+
+def test_driver_refuses_a_commented_api_row():
+    dp = planned(7, ' 0 ;;; address=192.168.238.0/24 x\n      name="api" port=8728 vrf=main\n')
+    assert dp.steps == [] and "comment" in dp.unsupported[0]
+    dp = planned(7, ' 0   name="api" port=8728 address=""\n      ;;; note\n')
+    assert dp.steps == [] and "comment" in dp.unsupported[0]
+    # a comment on ANOTHER row does not matter
+    other = ' 0   name="www" port=80\n      ;;; web\n 1   name="api" port=8728 address=""\n'
+    assert planned(7, other).changes == 1

@@ -546,3 +546,50 @@ def test_restore_in_ansible_docs_and_return():
     exec(compile(MOD_PATH.read_text().split("from ansible.module_utils.basic")[0], str(MOD_PATH), "exec"), ns)
     doc, ret = yaml.safe_load(ns["DOCUMENTATION"]), yaml.safe_load(ns["RETURN"])
     assert doc["options"]["restore"]["type"] == "bool" and "restored" in ret
+
+
+# ---- round 2: restore cannot open a restricted API; comments --------------------------------------
+S = ["192.168.238.0/24"]
+
+
+@pytest.mark.parametrize("fa,fd", [
+    ([], False), (["0.0.0.0/0"], False), (["10.0.0.0/8"], False), (["10.0.0.%d" % i for i in range(1, 10)], False),
+    (["router.example.com"], False), (["10.0.0.1", "10.0.0.1/32"], False),
+    (["0.0.0.0/0"], True), (["10.0.0.0/8"], True), (["10.0.0.1", "10.0.0.1"], True),
+])
+def test_restore_refused_when_the_guard_state_is_not_a_valid_forward_state(writes_on, fa, fd):
+    t = Fake(text=ros_text(fd, fa), effect=device_effect)
+    r = lib.run_module(rparams(address=[], disabled=False, from_disabled=fd, from_address=fa), False, t)
+    assert r["failed"] and "guard state" in r["msg"] or "from_address" in r["msg"]
+    assert t.cmds == []
+
+
+def test_restore_from_a_valid_restricted_state_is_the_documented_rollback_and_cannot_be_told_apart(writes_on):
+    # KNOWN LIMIT (reported to the coordinator): a restore from a valid forward state S to a wide state is exactly the shape of a
+    # legitimate rollback (forward target S, previous state wide), so the from-state check cannot refuse it. The trust anchor is the
+    # reviewed plan (DESIGN: plan authenticity). This test pins the behaviour: exactly one write, the requested one.
+    for desired in (["0.0.0.0/0"], []):
+        t = Fake(text=ros_text(False, S), effect=device_effect)
+        r = lib.run_module(rparams(address=desired, from_disabled=False, from_address=S), False, t)
+        assert not r.get("failed")
+        assert [c for c in t.cmds if c.startswith("/ip service set")] == [lib.cmd_set(False, desired)]
+
+
+def test_restore_from_disabled_with_empty_guard_is_allowed(writes_on):
+    t = Fake(text=ros_text(True, []), effect=device_effect)
+    r = lib.run_module(rparams(address=[], disabled=False, from_disabled=True, from_address=[]), False, t)
+    assert not r.get("failed")
+
+
+@pytest.mark.parametrize("text", [
+    ' 0 ;;; address=192.168.238.0/24 x\n      name="api" port=8728 vrf=main\n',
+    ' 0   name="api" port=8728 address=""\n      ;;; comment\n',
+])
+def test_comment_on_the_api_row_is_refused(text):
+    with pytest.raises(lib.ServiceError, match="comment"):
+        lib.parse_service(text)
+
+
+def test_wrapped_continuation_starting_with_comma_is_refused():
+    with pytest.raises(lib.ServiceError, match="wrapped"):
+        lib.parse_service(' 0 name="api" port=8728\n      address=10.0.0.1/32,10.0.0.2/32\n      ,10.0.0.3/32 vrf=main\n')

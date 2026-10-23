@@ -161,6 +161,17 @@ def validate_params(params):
         if address is None:
             raise ServiceError("restore requires address (an empty list restores an unrestricted state)")
         address = validate_restore_addresses(address, "address")
+        # the state the restore starts from must itself be a valid FORWARD state: a restore can only leave a state this module
+        # could have created, so it can never be used to open a restricted API
+        fa_guard = params.get("from_address")
+        if not isinstance(fa_guard, list) or not all(isinstance(x, str) for x in fa_guard):
+            raise ServiceError("from_address must be a list of strings")
+        try:
+            validate_addresses([x.strip() for x in fa_guard], "from_address")
+        except ServiceError as e:
+            raise ServiceError("restore refused: the guard state is not a valid forward state (%s)" % e)
+        if params.get("from_disabled") is False and not fa_guard:
+            raise ServiceError("restore refused: the guard state (enabled, unrestricted) is not a valid forward state")
     elif address is not None:
         address = validate_addresses(address, "address")
     if not restore and disabled is False and not address:
@@ -205,9 +216,11 @@ _ADDR_LAST_RX = re.compile(r'address=(?:"[^"]*"|\S*)\s*$')
 def _address_wrapped(lines):
     """True when the address value may continue on a following line: `address=` is the last token of a line that is
     followed by a continuation line (a wrapped list, e.g. a continuation starting with a comma). `address=""` is complete."""
-    for i, line in enumerate(lines[:-1]):
+    for i, line in enumerate(lines):
+        if i > 0 and line.lstrip().startswith(","):
+            return True
         m = _ADDR_LAST_RX.search(line)
-        if m and m.group(0).rstrip() != 'address=""':
+        if i < len(lines) - 1 and m and m.group(0).rstrip() != 'address=""':
             return True
     return False
 
@@ -218,6 +231,9 @@ def parse_service(text):
     for flags, body, lines in _entries(text):
         kv = dict((k, v.strip('"')) for k, v in _KV_RX.findall(body))
         if kv.get("name") == "api":
+            if any(";;;" in ln for ln in lines):
+                raise ServiceError("the row of service api carries a comment (;;;) in the device output; a comment can "
+                                   "contain text that looks like fields, so the row is not parsed (no change made)")
             if _address_wrapped(lines):
                 raise ServiceError("the address value of service api is wrapped over several lines in the device output; "
                                    "refusing to guess (no change made)")

@@ -108,6 +108,16 @@ later be only the transport that runs an approved plan.
   then finds the state already restored, and its restore call fails with "state already differs from the one the change created (module
   may have restored it)". Likewise, with writes disabled the change fails before writing and the rescue reports the same message
   instead of a misleading drift error about the plan.
+- **Restore guard and plan trust**: with `restore`, the guard state (`from_disabled`, `from_address`) must itself be a valid forward
+  state (canonical, /24 or longer, max 8, no duplicates, non-empty when enabled; empty allowed when disabled), so a restore can only
+  leave a state this module could have created. It cannot distinguish a legitimate rollback from a forged one that starts from a
+  restricted state: the trust anchor is the plan. `plan_id` is a recomputable hash, not a signature, and plans are trusted input
+  reviewed and committed through the MR; a forged plan can carry a wide rollback. Protect the MR review, not the module.
+- **Comments**: an `api` row that carries a comment (`;;;`) is refused (driver `unsupported`, module error), because a comment may hold
+  text that looks like fields.
+- **Known limit, false refusals**: wrap detection fails safe and can refuse a row that is not really wrapped (e.g. `address=10.0.0.1/32`
+  ending a line, followed by a continuation line such as `vrf=main`). Workaround: the read already uses `without-paging`; widen the
+  terminal or avoid the long line (fewer fields), then re-plan.
 - **Wrapped output**: an `api` row whose address value is wrapped over several lines (the address is the last token of a line that is
   followed by a continuation) is refused by both the driver (`unsupported`) and the module (error, no write); nothing is guessed.
 - **Rendering**: GATE (module, plan's previous values as `from_*`, literal `check_mode: true`) outside the rescued group; inside it the

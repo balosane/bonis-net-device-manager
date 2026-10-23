@@ -28,17 +28,27 @@ _ADDR_LAST = re.compile(r'address=(?:"[^"]*"|\S*)\s*$')
 _ENTRY_LINE = re.compile(r"^\s*\d+\s")
 
 
-def _address_wrapped(text: str) -> bool:
-    """True when the `api` row's address may continue on a following line (a wrapped list)."""
-    lines = text.splitlines()
-    for i, line in enumerate(lines[:-1]):
-        if 'name="api"' not in line:
+def _api_row_problem(text: str) -> str | None:
+    """Why the `api` record cannot be read safely, or None. Same logic as the routeros_service module: a record is an entry line
+    plus its continuation lines; refuse a comment (`;;;`) anywhere in it and an address value that may continue on a following line."""
+    entries: list[list[str]] = []
+    for line in text.splitlines():
+        if _ENTRY_LINE.match(line):
+            entries.append([line])
+        elif entries and line.strip() and not line.lstrip().startswith(("Flags:", "Columns:")):
+            entries[-1].append(line)
+    for lines in entries:
+        if not re.search(r'name="?api"?(\s|$)', " ".join(lines)):
             continue
-        m = _ADDR_LAST.search(line)
-        nxt = lines[i + 1]
-        if m and m.group(0).rstrip() != 'address=""' and nxt.strip() and not _ENTRY_LINE.match(nxt):
-            return True
-    return False
+        if any(";;;" in ln for ln in lines):
+            return "carries a comment (;;;); a comment can contain text that looks like fields, so the row is not parsed"
+        for i, ln in enumerate(lines):
+            if i > 0 and ln.lstrip().startswith(","):
+                return "has its address value wrapped over several lines"
+            m = _ADDR_LAST.search(ln)
+            if i < len(lines) - 1 and m and m.group(0).rstrip() != 'address=""':
+                return "has its address value wrapped over several lines"
+    return None
 
 
 def _is_v4(text: str) -> bool:
@@ -254,9 +264,9 @@ class RouterOsDriver(Driver):
         """Enable the plain API service and restrict it to the intent's addresses. Only the service `api` is touched
         (never ssh, winbox, www, api-ssl ...). The write is `/ip service set [find name=api] ...`; the rollback restores the
         previous `disabled` and `address`."""
-        if _address_wrapped(live[SERVICE_API]):
-            dp.unsupported.append("the address value of service `api` is wrapped over several lines in the device output; "
-                                  "refusing to guess (no change planned)")
+        problem = _api_row_problem(live[SERVICE_API])
+        if problem:
+            dp.unsupported.append(f"the row of service `api` in the device output {problem}; refusing to guess (no change planned)")
             return
         row = next((r for r in ros_records(live[SERVICE_API]) if r.get("name") == "api"), None)
         if row is None:
