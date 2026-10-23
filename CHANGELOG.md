@@ -1,6 +1,22 @@
 # Changelog
 
 ## Unreleased
+- mgmt-api review fixes: module argument `restore` (rollback-only, needs `from_disabled` + `from_address`; accepts empty/wide/host-bit/up to 32
+  entry previous states), renderer emits `restore: true` only in `rescue:`; wrapped `address` values refused by driver and module;
+  module returns `restored` and attempts one restore after a failed post-write read; rescue drift message for restore; docs: airOS is
+  `invalid`, cleartext trade-off reworded.
+- Feature `mgmt-api` (BONISISP-47, protected): intent `MgmtApi(allowed, reason)` (IPv4 or IPv4/prefix, canonical, not wider than /24, max 8),
+  RouterOS 6/7 driver (`/ip service print detail without-paging where name=api`; X = disabled, I next to X tolerated), two anchored
+  write shapes in `classify.py` (`/ip service set [find name=api] disabled=yes|no address=LIST`, and `address=""` for rollbacks),
+  renderer module `bonis.netdev.routeros_service` (SSH module: gate outside the rescue, `from_*` guards, verify with literal check_mode,
+  rollback in `rescue:`; no `api_info` because the API may be off), `mgmt_api_intents`, `load_intent` key `mgmt-api`, seed feature,
+  capability `mgmt.api` on all RouterOS models, template `api-bootstrap`, global `api_allowed`, golden `mgmt-api.playbook.yml`,
+  selftest check 15. airOS: `invalid` (lacks capability `mgmt.api`). Enforcement of `protect: true` is future work.
+- Ansible module `bonis.netdev.routeros_service` (BONISISP-47): enables/disables the plain API service of a RouterOS device over SSH
+  (`disabled`, `address` list with strict validation, drift guard `from_disabled`/`from_address`, check mode, diff). Write path
+  disabled by the code constant `WRITES_ENABLED = False`; deny-by-default command classifier (one read, one write shape); verify and
+  restore after a write. Tests use fakes only. Real captures show RouterOS flags disabled services `XI`: flag I is
+  ignored when X is present; I without X is still refused.
 - Renderer: every `api_info` task passes `hide_defaults: false`. Found by a live `--check` run on RouterOS 6.47.7: `api_info` hides values equal to the
   collection defaults (`secondary-ntp` 0.0.0.0, empty `servers`, `enabled` no), so the NTP precheck asserted a value that was not returned.
 - Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,

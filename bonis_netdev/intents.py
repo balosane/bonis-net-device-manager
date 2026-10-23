@@ -131,3 +131,56 @@ class Syslog:
 
     def as_dict(self):
         return {"intent": "syslog", "host": self.host, "port": self.port, "reason": self.reason}
+
+
+_ALLOWED_RE = re.compile(r"[0-9]+(?:\.[0-9]+){3}(?:/[0-9]+)?")
+MAX_API_ALLOWED = 8
+MIN_API_PREFIX = 24
+
+
+@dataclass(frozen=True)
+class MgmtApi:
+    """Enable the plain RouterOS API service, restricted to these source addresses (IPv4 or IPv4/prefix, canonical form).
+
+    Protects the controller's own access path: the address list is what the router accepts API connections from."""
+    allowed: tuple[str, ...]
+    reason: str = ""
+
+    def __post_init__(self):
+        if not isinstance(self.allowed, (tuple, list)):
+            raise IntentError(f"allowed: expected a list of addresses, got {self.allowed!r}")
+        if not self.allowed:
+            raise IntentError("allowed: at least one address is required")
+        if len(self.allowed) > MAX_API_ALLOWED:
+            raise IntentError(f"allowed: at most {MAX_API_ALLOWED} entries, got {len(self.allowed)}")
+        seen = set()
+        for a in self.allowed:
+            if not isinstance(a, str) or not _ALLOWED_RE.fullmatch(a):
+                raise IntentError(f"allowed: {a!r} is not an IPv4 address or IPv4/prefix")
+            try:
+                net = ipaddress.IPv4Network(a, strict=True)
+            except ValueError:
+                raise IntentError(f"allowed: {a!r} is not a valid IPv4 address or network (host bits set?)") from None
+            canonical = str(net.network_address) if "/" not in a else str(net)
+            if canonical != a:
+                raise IntentError(f"allowed: {a!r} is not in canonical form ({canonical!r})")
+            if net.prefixlen < MIN_API_PREFIX:
+                raise IntentError(f"allowed: {a!r} is wider than /{MIN_API_PREFIX}; the API must not be opened to a large network")
+            ip = net.network_address
+            for name, bad in (("unspecified", ip.is_unspecified), ("loopback", ip.is_loopback), ("multicast", ip.is_multicast),
+                              ("broadcast/reserved", ip.is_reserved or net.broadcast_address == ipaddress.IPv4Address("255.255.255.255"))):
+                if bad:
+                    raise IntentError(f"allowed: {a!r} is {name}, not a usable controller address")
+            if net in seen:
+                raise IntentError(f"allowed: duplicate entry {a!r}")
+            seen.add(net)
+        # a list given by a caller is frozen into a tuple (the dataclass is frozen and hashable)
+        object.__setattr__(self, "allowed", tuple(self.allowed))
+
+    @property
+    def networks(self) -> tuple[str, ...]:
+        """The entries in CIDR form (a bare address is a /32), intent order kept: what is written to the device."""
+        return tuple(a if "/" in a else f"{a}/32" for a in self.allowed)
+
+    def as_dict(self):
+        return {"intent": "mgmt-api", "allowed": list(self.allowed), "reason": self.reason}

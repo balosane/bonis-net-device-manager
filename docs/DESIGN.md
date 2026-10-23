@@ -87,6 +87,57 @@ later be only the transport that runs an approved plan.
 - **Not implemented, candidate feature `timezone-standard`**: router MOR-N29-RT-1 has time-zone-name `manual` GMT+00:00, and
   airOS APs report `system.timezone=GMT+12` with a date in 2019; NTP alone does not fix wrong zones.
 
+## mgmt-api: enabling the RouterOS API (BONISISP-47)
+
+- **What**: `MgmtApi(allowed)` -> `/ip service set [find name=api] disabled=no address=<allowed>`. Feature `mgmt-api` (`protect: true`:
+  it guards the controller's access path; enforcement of `protect` is future work), capability `mgmt.api` (RouterOS only; airOS models lack the capability, so the matrix shows `invalid` "lacks capability mgmt.api"; `n/a` would appear only for a capable model without a driver).
+- **Chicken and egg**: the normal path (`api_modify`/`api_info`) needs the API, which is off on 10 of 21 routers. So this feature is
+  executed by the SSH module `bonis.netdev.routeros_service` (contract below). It is the only RouterOS step that does not use
+  `community.routeros`, and for the same reason the precheck is not an `api_info` read: the gate is the module in check mode.
+- **Module contract**: args `host`, `username`/`password` (`netdev_user`/`netdev_pass`), `service: api`, `disabled` (bool), `address`
+  (list), optional `from_disabled` (bool) and `from_address` (list, `[]` = unrestricted); no `port` (SSH 22); returns `changed`, `diff`,
+  `current`, and `restored` after a failed write. With `from_*` it fails when the device does not hold that state.
+  Optional `restore` (bool, default false): set ONLY by the rollback task in `rescue:`. It lets the module write any previous state
+  the write shape can express as the desired value (empty address list -> `address=""`, any prefix /0-/32 with host bits, up to 32
+  entries, no duplicates after normalisation, IPv4 only) and is accepted only together with BOTH `from_disabled` and `from_address`
+  (the drift guard to the state the forward change created). The forward path keeps all its validation (non-empty address when
+  enabling, /24 or longer, max 8, canonical). The renderer never emits `restore` in a gate, change or verify task, and
+  `verify_playbook` compares the whole play, so a tampered flag is rejected.
+- **Conflicting rollbacks**: if the module's own verification fails after a write it restores the previous values once and returns
+  `restored: true` (the message says so); it also attempts that one restore when the post-write read fails. The playbook's rescue
+  then finds the state already restored, and its restore call fails with "state already differs from the one the change created (module
+  may have restored it)". Likewise, with writes disabled the change fails before writing and the rescue reports the same message
+  instead of a misleading drift error about the plan.
+- **Restore guard and plan trust**: with `restore`, the guard state (`from_disabled`, `from_address`) must itself be a valid forward
+  state (canonical, /24 or longer, max 8, no duplicates, non-empty when enabled; empty allowed when disabled), so a restore can only
+  leave a state this module could have created. It cannot distinguish a legitimate rollback from a forged one that starts from a
+  restricted state: the trust anchor is the plan. `plan_id` is a recomputable hash, not a signature, and plans are trusted input
+  reviewed and committed through the MR; a forged plan can carry a wide rollback. Protect the MR review, not the module.
+- **Comments**: an `api` row that carries a comment (`;;;`) is refused (driver `unsupported`, module error), because a comment may hold
+  text that looks like fields.
+- **Known limit, false refusals**: wrap detection fails safe and can refuse a row that is not really wrapped (e.g. `address=10.0.0.1/32`
+  ending a line, followed by a continuation line such as `vrf=main`). Workaround: the read already uses `without-paging`; widen the
+  terminal or avoid the long line (fewer fields), then re-plan.
+- **Wrapped output**: an `api` row whose address value is wrapped over several lines (the address is the last token of a line that is
+  followed by a continuation) is refused by both the driver (`unsupported`) and the module (error, no write); nothing is guessed.
+- **Rendering**: GATE (module, plan's previous values as `from_*`, literal `check_mode: true`) outside the rescued group; inside it the
+  change (same `from_*` guard; check_mode follows `netdev_check_only`), verify (new values as `from_*` and desired, literal check_mode,
+  `assert not changed`, only when not check-only); `rescue:` rollback = previous values as desired, new values as `from_*`. The
+  previous values come from the plan's rollback text; a change without rollback is a `RenderError`.
+- **Plan logic**: enabled and the same address set (compared as sets, `1.2.3.4` == `1.2.3.4/32`) -> `unchanged`; otherwise one change.
+  Bare addresses are written as `/32`; intent order is kept. Previous address lists are restored as read if they match the command
+  shape (even a wide one), otherwise the device is `unsupported`. A previously open (unrestricted) enabled API gets the note
+  "API was open to everyone; this narrows it". RouterOS prints a disabled service with flags `XI`; X means disabled, `I` without `X` is `unsupported`.
+- **Cleartext trade-off**: the plain API (8728) sends credentials unencrypted. Restricting `address` limits who can CONNECT, not who
+  can sniff: the credentials cross every hop between the controller and the router in cleartext. This is accepted because that path is
+  the management network. `api-ssl` (certificates, TLS) is tracked as future work (`netdev_api_tls` stays false).
+- **Ordering**: `mgmt-api` must run before any `api_modify` feature on such a router (apply the `api-bootstrap` template first).
+- **Lockout analysis**: only the `api` service row is touched (`[find name=api]` is in every shape; ssh, winbox, www, telnet, ftp are
+  not). SSH, the transport of this feature, is never changed, so the controller keeps its access; a wrong list can at worst lock out the
+  API (not the console), and the rollback restores the previous state. The intent refuses `0.0.0.0/0`, anything wider than /24,
+  loopback, multicast and reserved addresses.
+- **Fleet write ban**: the playbook is check-only by default, `RUN_APPLY_ENABLED` and the module's `WRITES_ENABLED` are untouched.
+
 ## NetBox inventory (`netbox.py`, `inventory.py`, `reconcile.py`; BONISISP-44 phase 1)
 
 - NetBox is the source of the device list and of the *desired* template/feature assignment (tags `tpl-*`, `feat-*`); git stays
@@ -135,6 +186,7 @@ only the variables `netdev_user` / `netdev_pass`; the device address is the plan
 
 | plan step | task |
 |---|---|
+| `/ip service set [find name=api] disabled=D address=LIST` | `bonis.netdev.routeros_service` (SSH module; see "mgmt-api") with gate / `from_*` guards, no `api_info` |
 | `/ip dns set servers=A,B` | `community.routeros.api_modify` path `ip dns`, `handle_absent_entries/handle_entries_content: ignore` |
 | `/ip dhcp-server network set [find address=P] dns-server=A,B` | `api_info` + `assert` that P exists (api_modify would create it), then `api_modify` with `data: [{address: P, dns-server: A,B}]` |
 | RouterOS precheck / verify (reads) | `api_info` + `assert` against `expect`; verify tasks carry `when: not netdev_check_only` |
@@ -182,3 +234,22 @@ the environment contains only PATH, HOME, LANG and ANSIBLE_CONFIG. `--check --di
 unsupported and unsafe. `verify-playbook` warns about hazard names next to the playbook (`--strict-dir` fails).
 
 - Trust boundary of `run-playbook`: the playbook is verified byte for byte, the collection code that runs it (`ansible/collections`, `--collections-path`) is not. A change to that code is write-capable and needs the owner's review while the write ban lasts.
+
+## RouterOS service module (`bonis.netdev.routeros_service`, BONISISP-47)
+
+On 10 of 21 routers the RouterOS API is off, so `api_modify` cannot reach them; turning the API on therefore has to use SSH. The
+module is intentionally not a command runner: it reads `/ip service print detail without-paging where name=api` and may write
+only `/ip service set [find name=api] disabled=(yes|no) address=<list>`. `[find name=api]` is a literal, so ssh, winbox, www, telnet,
+ftp and api-ssl cannot be reached. `api-ssl` is not supported because it needs a certificate.
+
+Safety layers, same as `airos_cfg`: (1) `WRITES_ENABLED = False` code constant, a reviewed commit lifts it, not config; check mode never writes;
+(2) `GuardedTransport` with a deny-by-default classifier (anchored regexes with `\Z`; `;`, newline, CR, backtick, `$(` and `{{` rejected first),
+so anything else raises `CommandRefused` before the wire; (3) address validation (canonical IPv4, prefix /24 or longer, no
+unspecified/loopback/multicast/reserved/broadcast, no duplicates, max 8; enabling requires a non-empty list so the API is never
+opened to the world); (4) drift guard `from_disabled`/`from_address` compared right after the read; (5) re-read after a write, restore
+of the previous values on mismatch (an empty previous list is restored as `address=""`, the only place that form is written),
+and a refusal before writing if the previous state cannot be expressed in the write shape. Comparison normalises `a.b.c.d` to `a.b.c.d/32`
+because RouterOS prints single hosts that way. Disabling without `address` keeps the current list (for a currently empty list the
+command carries `address=""`, i.e. no change to the restriction).
+
+Parser note: RouterOS flags a disabled service `XI` (verified on real 6.x output), so `I` is only refused when `X` is absent. `address=""` parses as an empty list; extra keys (`vrf`, `max-sessions`) are ignored.

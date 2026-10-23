@@ -18,6 +18,11 @@
 `dns-standard`, `ntp-standard` (param `servers`), `syslog-standard` (params `syslog_host`, `syslog_port?`; capability
 `syslog.remote`) are implemented by the RouterOS and airOS drivers; `wifi-ap-5g` has no driver (`n/a`).
 
+`mgmt-api` (param `api_allowed`, a list of IPv4 / IPv4/prefix; capability `mgmt.api`, seeded on all RouterOS models, not airOS) is
+`protect: true`: it guards the controller's own access path (enforcement of `protect` is future work). The template `api-bootstrap`
+carries it; global `api_allowed` is the management jumphost that runs the controller. It must run before any `api_modify` feature on a
+router whose API is off.
+
 ## NetBox tags (`netdev reconcile`)
 
 The inventory can come from NetBox. A tag on a NetBox device selects what git config applies (desired state only):

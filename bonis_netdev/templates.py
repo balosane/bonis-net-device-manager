@@ -9,7 +9,7 @@ from pathlib import Path
 from .catalog import Model, load_models
 from .drivers.base import driver_class
 from .features import ConfigError, Feature, check_keys, check_param, documents, load_features, read_yaml, string_list, yaml_files, NAME_RE
-from .intents import DhcpNetworks, Dns, IntentError, Ntp, Resolver, Syslog
+from .intents import DhcpNetworks, Dns, IntentError, MgmtApi, Ntp, Resolver, Syslog
 
 OK, INVALID, NA = "ok", "invalid", "n/a"
 LAYERS = ("global", "region", "site", "role", "device")   # later layer wins
@@ -243,6 +243,18 @@ def syslog_intents(results: list[Result]) -> list[tuple[str, Syslog]]:
             try:
                 out.append((r.device, Syslog(r.params["syslog_host"], r.params.get("syslog_port", 514),
                                              reason=f"template feature {r.feature}")))
+            except IntentError as e:
+                raise ConfigError(f"device {r.device}: feature {r.feature}: {e}") from None
+    return out
+
+
+def mgmt_api_intents(results: list[Result]) -> list[tuple[str, MgmtApi]]:
+    """(device, MgmtApi intent) for each ok `mgmt-api` result."""
+    out = []
+    for r in results:
+        if r.status == OK and r.intent == "mgmt-api":
+            try:
+                out.append((r.device, MgmtApi(tuple(r.params["api_allowed"]), reason=f"template feature {r.feature}")))
             except IntentError as e:
                 raise ConfigError(f"device {r.device}: feature {r.feature}: {e}") from None
     return out

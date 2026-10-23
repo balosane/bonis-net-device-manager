@@ -20,13 +20,13 @@ from concurrent.futures import ThreadPoolExecutor
 import yaml
 
 from .drivers.base import build_device_plan, detect_driver
-from .intents import DhcpNetworks, Dns, IntentError, Ntp, Resolver, Syslog
+from .intents import DhcpNetworks, Dns, IntentError, MgmtApi, Ntp, Resolver, Syslog
 from .plan import DevicePlan, Plan
 from .transport import SshReadTransport
 
 
-def load_intent(path: str) -> Dns | Ntp | Syslog:
-    """`intent: dns | ntp | syslog`; unknown keys of ntp/syslog are an error so a typo cannot silently change the meaning."""
+def load_intent(path: str) -> Dns | Ntp | Syslog | MgmtApi:
+    """`intent: dns | ntp | syslog | mgmt-api`; unknown keys of ntp/syslog/mgmt-api are an error so a typo cannot silently change the meaning."""
     with open(path, encoding="utf-8") as f:
         d = yaml.safe_load(f) or {}
     if not isinstance(d, dict):
@@ -34,7 +34,8 @@ def load_intent(path: str) -> Dns | Ntp | Syslog:
     kind = d.get("intent")
     keys = {"dns": {"intent", "primary", "secondary", "extra", "scope", "reason"},
             "ntp": {"intent", "servers", "reason"},
-            "syslog": {"intent", "host", "port", "reason"}}
+            "syslog": {"intent", "host", "port", "reason"},
+            "mgmt-api": {"intent", "allowed", "reason"}}
     if kind not in keys:
         raise IntentError(f"{path}: `intent` must be one of {', '.join(sorted(keys))}, got {kind!r}")
     unknown = sorted(set(d) - keys[kind])
@@ -45,6 +46,11 @@ def load_intent(path: str) -> Dns | Ntp | Syslog:
         if not isinstance(servers, list):
             raise IntentError(f"{path}: servers must be a list")
         return Ntp(servers=tuple(servers), reason=d.get("reason", ""))
+    if kind == "mgmt-api":
+        allowed = d.get("allowed")
+        if not isinstance(allowed, list):
+            raise IntentError(f"{path}: allowed must be a list")
+        return MgmtApi(allowed=tuple(allowed), reason=d.get("reason", ""))
     if kind == "syslog":
         if "host" not in d:
             raise IntentError(f"{path}: host is required")
@@ -261,6 +267,12 @@ def cmd_selftest(a) -> int:
     check("a missing netdev-remote logging action is reported unsupported, never created",
           lambda: (lambda dp: dp.steps == [] and "creation" in dp.unsupported[0])(
               build_device_plan(RouterOsDriver(7), "r", Syslog("192.168.6.1"), samples.ros_syslog_transport(samples.LOG_ACTIONS))))
+    check("mgmt-api: a set with an injected suffix, another service or 0.0.0.0/0 is not a classified update",
+          lambda: all(effect_of(c) != Effect.UPDATE for c in (
+              "/ip service set [find name=api] disabled=no address=10.0.0.1/32;/system reboot",
+              "/ip service set [find name=ssh] disabled=yes address=10.0.0.1/32",
+              "/ip service set [find] disabled=no address=10.0.0.1/32",
+              "/ip service set [find name=api] disabled=no address=10.0.0.1/33")))
     print(f"\n{sum(results)}/{len(results)} checks passed")
     return 0 if all(results) else 1
 

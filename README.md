@@ -27,7 +27,7 @@ pip install .                 # Python 3.10+, installs the `netdev` command
 ## Try it in two minutes
 
 ```bash
-netdev selftest                 # 14 safety checks on fake devices: no network, no credentials
+netdev selftest                 # 15 safety checks on fake devices: no network, no credentials
 netdev demo                     # a sample plan for a fake router and a fake AP
 ```
 
@@ -54,7 +54,7 @@ netdev check plan.json          # exit 2 if the plan was edited after it was cre
 ```
 
 Intent files: `intent: dns` (`examples/dns-intent.yml`), `intent: ntp` (`examples/ntp-intent.yml`, `servers:` list of IPs or host names)
-and `intent: syslog` (`examples/syslog-intent.yml`, `host:` IPv4, `port:` default 514). `netdev plan --intent` picks the planner by that key.
+`intent: syslog` (`examples/syslog-intent.yml`, `host:` IPv4, `port:` default 514) and `intent: mgmt-api` (`examples/mgmt-api-intent.yml`, `allowed:` list of IPv4 / IPv4/prefix). `netdev plan --intent` picks the planner by that key.
 
 `netdev plan` exits 1 if any device could not be read; that device carries an `error` in the plan and the others are still planned.
 
@@ -79,6 +79,8 @@ refuse if the hash differs, replace exactly those keys in the whole file, and wr
 | `ntp-standard` | `/system ntp client set enabled=yes primary-ntp=A secondary-ntp=B` (6.x and 7.x before 7.15; IPv4 only, max 2, `0.0.0.0` = unset) or `... servers=A,B` (7.15+; IPs or host names). The shape follows what `/system ntp client print` shows. | keys `ntpclient.N.server`, `ntpclient.N.status`, `ntpclient.status` (max 2 servers; host names allowed; only differing keys are set; the `airos_cfg` module appends keys missing from the file) |
 | `syslog-standard` | `/system logging action set [find name=netdev-remote] remote=IP remote-port=N`: updates an EXISTING action only. If it does not exist the device is reported `unsupported` (creating actions/rules is not supported while writes are banned). Logging rules are never touched. | keys `syslog.remote.ip`, `syslog.remote.port`, `syslog.remote.status`, `syslog.status` |
 
+| `mgmt-api` (BONISISP-47, protected) | `/ip service set [find name=api] disabled=no address=A,B`: enables the plain API service restricted to the controller address(es); only the service `api` is touched. Rollback restores the previous `disabled` and `address`. Executed by the SSH module `bonis.netdev.routeros_service`, because the API may be off. See DESIGN.md. | not applicable: airOS models lack capability `mgmt.api` (`invalid`) |
+
 A device that already holds the intent goes to `unchanged`, as with DNS.
 
 ## Ansible module for airOS
@@ -87,6 +89,10 @@ A device that already holds the intent goes to `unchanged`, as with DNS.
 applies the `airos-cfg-set` step of a plan (`base` hash + key/value settings) with a drift guard, check mode and a key-only diff.
 **Its write path is disabled** (`WRITES_ENABLED = False` in the module code); check mode is always read-only. See the
 collection README.
+
+`bonis.netdev.routeros_service` (BONISISP-47) enables/disables the plain RouterOS API service over SSH for routers whose API is
+off (`disabled`, `address` list, drift guard `from_disabled`/`from_address`). It reads one service row and is never a command
+runner; its write path is disabled the same way (`WRITES_ENABLED = False` in `module_utils/routeros_service.py`). See the collection README.
 
 ## Ansible executor
 

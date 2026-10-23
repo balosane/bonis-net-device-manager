@@ -77,7 +77,7 @@ class Plan:
         return json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
     def summary(self) -> str:
-        lines = [f"plan {self.plan_id[:12]}  {self.intent.get('intent')}  {self.intent.get('servers') or self.intent.get('host')}"]
+        lines = [f"plan {self.plan_id[:12]}  {self.intent.get('intent')}  {self.intent.get('servers') or self.intent.get('host') or self.intent.get('allowed')}"]
         for d in sorted(self.devices, key=lambda d: d.device):
             if d.error:
                 lines.append(f"  {d.device:<22} ERROR  {d.error}")

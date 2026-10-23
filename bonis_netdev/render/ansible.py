@@ -32,11 +32,13 @@ ALLOWLIST = frozenset({
     "community.routeros.api_info",
     "community.routeros.api_modify",
     "bonis.netdev.airos_cfg",
+    "bonis.netdev.routeros_service",
     "ansible.builtin.debug",
     "ansible.builtin.assert",
     "ansible.builtin.set_fact",
 })
 M_INFO, M_MODIFY, M_AIROS = "community.routeros.api_info", "community.routeros.api_modify", "bonis.netdev.airos_cfg"
+M_SERVICE = "bonis.netdev.routeros_service"
 M_DEBUG, M_ASSERT = "ansible.builtin.debug", "ansible.builtin.assert"
 
 # keys of a task that are not the module
@@ -70,6 +72,11 @@ _ROS_LOG_SET = re.compile(rf"^/system logging action set \[find name=netdev-remo
 _ROS_LOG_READ = re.compile(r"^/system logging action print detail without-paging where name=netdev-remote$")
 _NTP_EXPECT = re.compile(rf"enabled=(yes|no)(?: primary-ntp=({_V4}) secondary-ntp=({_V4})| servers=({_HOSTS}|))")
 _LOG_EXPECT = re.compile(rf"remote=({_V4}) remote-port=({_PORT})")
+_CIDR = rf"{_V4}(?:/(?:3[0-2]|[12]?[0-9]))?"
+_CIDRS = rf"{_CIDR}(?:,{_CIDR})*"
+_ROS_SVC_SET = re.compile(rf'^/ip service set \[find name=api\] disabled=(yes|no) address=({_CIDRS}|"")\Z')
+_ROS_SVC_READ = "/ip service print detail without-paging where name=api"
+_SVC_EXPECT = re.compile(rf"disabled=(yes|no) address=({_CIDRS}|)")
 _AIROS_READ = "cat /tmp/system.cfg"
 _HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
 
@@ -155,6 +162,49 @@ def _render_airos_gate(ctx: _Ctx, command: str, purpose: str) -> list[dict]:
                       "base": base, "settings": _safe_map(settings), "state": "present"}, always_check=True)]
 
 
+def _svc_values(ctx: _Ctx, command: str | None, what: str) -> tuple[bool, list[str]]:
+    """(disabled, address list) of a classified `/ip service set [find name=api] ...` text; `address=""` is the empty list."""
+    m = _ROS_SVC_SET.match(command or "")
+    if not m:
+        raise RenderError(f"{ctx.dev.device}: {what} {command!r} is not an api service update; cannot guard or undo the change")
+    dis, addr = m.groups()
+    return dis == "yes", ([] if addr == '""' else [_safe(a, "address") for a in addr.split(",")])
+
+
+def _svc_args(ctx: _Ctx, target: tuple[bool, list[str]], current: tuple[bool, list[str]], restore: bool = False) -> dict:
+    """Arguments of bonis.netdev.routeros_service: the desired state and the state the device must be in now (from_*)."""
+    args = {"host": ctx.host, "username": "{{ netdev_user }}", "password": "{{ netdev_pass }}", "service": "api",
+            "disabled": target[0], "address": list(target[1]), "from_disabled": current[0], "from_address": list(current[1])}
+    if restore:
+        # ONLY the rollback in `rescue:` sets this: it lets the module write a previous state that the forward validation
+        # would refuse (unrestricted, wide list); the from_* guard stays mandatory
+        args["restore"] = True
+    return args
+
+
+def _render_svc_gate(ctx: _Ctx, change: Step) -> list[dict]:
+    """The precheck of the api service as a REAL gate. The API may be OFF, so it cannot be read through api_info; the module
+    reads the service over SSH. Placed OUTSIDE the rescued block, literal check_mode, with the plan's own previous values
+    (taken from the rollback) as from_*: a drifted router fails here, before anything changed, and no rollback runs."""
+    prev = _svc_values(ctx, change.rollback, "rollback")
+    target = _svc_values(ctx, change.command, "change")
+    return [ctx.task(f"gate: api service state before {change.purpose}", M_SERVICE, _svc_args(ctx, target, prev), always_check=True)]
+
+
+def _render_svc_verify(ctx: _Ctx, step: Step) -> list[dict]:
+    m = _SVC_EXPECT.fullmatch(step.expect or "")
+    if step.command != _ROS_SVC_READ or not m:
+        raise RenderError(f"{ctx.dev.device}: cannot render verify {step.command!r} expect {step.expect!r} of the api service")
+    want = (m.group(1) == "yes", [_safe(a, "address") for a in m.group(2).split(",") if a])
+    reg = ctx.var()
+    return [
+        # the new values as from_*: nothing may be left to change
+        ctx.task(f"{step.purpose}", M_SERVICE, _svc_args(ctx, want, want), register=reg, verify=True, always_check=True),
+        _assert(ctx, f"{step.purpose}: nothing left to change", [f"not {reg}.changed"],
+                f"{ctx.dev.device}: api service does not hold {step.expect}", verify=True),
+    ]
+
+
 def _kind(dev: DevicePlan) -> str:
     if dev.driver.startswith("routeros"):
         return "routeros"
@@ -170,9 +220,15 @@ def _expect_value(step: Step, rx: str, who: str) -> str:
     return m.group(1)
 
 
-def _render_update(ctx: _Ctx, command: str, purpose: str, kind: str, verb: str) -> list[dict]:
-    """A classified update -> tasks. Only the listed fields of the listed entries are touched."""
+def _render_update(ctx: _Ctx, command: str, purpose: str, kind: str, verb: str, counterpart: str | None = None) -> list[dict]:
+    """A classified update -> tasks. Only the listed fields of the listed entries are touched. `counterpart` is the other
+    side of a change/rollback pair: for the api service it supplies the from_* values."""
     d = ctx.dev.device
+    if kind == "routeros" and _ROS_SVC_SET.match(command):
+        # the change guards on the previous values (from the rollback); the rollback guards on the values the change set
+        return [ctx.task(f"{verb} {purpose}", M_SERVICE,
+                         _svc_args(ctx, _svc_values(ctx, command, verb), _svc_values(ctx, counterpart, "counterpart"),
+                                   restore=(verb == "rollback")))]
     if kind == "routeros" and (m := _ROS_DNS_SET.match(command)):
         return [ctx.task(f"{verb} {purpose}", M_MODIFY,
                          {**ctx.conn(), "path": "ip dns", "data": [{"servers": m.group(1)}], **_IGNORE})]
@@ -341,20 +397,23 @@ def _render_device(dev: DevicePlan, index: int, check_only: bool) -> dict | None
     ctx = _Ctx(dev, index, check_only)
     body: list[dict] = []
     for pre, change, post in _groups(dev.steps):
+        svc = kind == "routeros" and change is not None and bool(_ROS_SVC_SET.match(change.command))
         for s in pre:
-            if kind == "airos" and change is not None:
-                continue   # replaced by the gate below
+            if (kind == "airos" or svc) and change is not None:
+                continue   # replaced by the gate below (the api service may be off: no api_info read is possible)
             body += _render_read(ctx, s, kind, verify=False)
         if change is None:
             continue
         if kind == "airos":
             body += _render_airos_gate(ctx, change.command, change.purpose)
-        inner = _render_update(ctx, change.command, change.purpose, kind, "change")
+        if svc:
+            body += _render_svc_gate(ctx, change)
+        inner = _render_update(ctx, change.command, change.purpose, kind, "change", change.rollback)
         for s in post:
-            inner += _render_read(ctx, s, kind, verify=True)
+            inner += _render_svc_verify(ctx, s) if svc else _render_read(ctx, s, kind, verify=True)
         group: dict = {"block": inner}
         if change.rollback:
-            rollback = _render_update(ctx, change.rollback, f"undo {change.purpose}", kind, "rollback")
+            rollback = _render_update(ctx, change.rollback, f"undo {change.purpose}", kind, "rollback", change.command)
             stop = _assert(ctx, "stop after rollback", ["false"], f"{dev.device}: change failed; rollback was run, stopping")
             group["rescue"] = rollback + [stop]
         body.append(group)
