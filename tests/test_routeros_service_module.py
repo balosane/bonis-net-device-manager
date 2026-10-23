@@ -56,7 +56,7 @@ GOOD = ["192.168.238.0/24"]
 
 
 class Fake(lib.Transport):
-    def __init__(self, reads=None, text=V7_DISABLED_WRAPPED, effect=None):
+    def __init__(self, reads=None, text=V6_DISABLED, effect=None):
         self.reads = list(reads or [])
         self.text = text
         self.effect = effect
@@ -99,7 +99,8 @@ def writes_on(monkeypatch):
     (V6_DISABLED, True, []),
     (V6_ADDR_ABSENT, True, []),
     (V7_ENABLED, False, ["192.168.238.0/24"]),
-    (V7_DISABLED_WRAPPED, True, ["192.168.238.0/24", "10.1.2.3/32"]),
+    (' 3 X  name="api" address="" port=8728\n       max-sessions=20 vrf=main\n', True, []),
+    (' 3 X  name="api" address=10.0.0.0/24 max-sessions=20\n       vrf=main\n', True, ["10.0.0.0/24"]),
     (V7_EMPTY, False, []),
     (V7_EMPTY_BARE, False, []),
     ("name: api\ndisabled: yes\naddress: 1.2.3.4/32\n", True, ["1.2.3.4/32"]),
@@ -115,6 +116,10 @@ def test_parse(text, dis, addr):
     (V6_ENABLED + V6_ENABLED.split("\n", 1)[1], "ambiguous"),
     (' 3 I name="api" port=8728 address=""\n', "invalid"),
     ("bad command name\n", "no row"),
+    (V7_DISABLED_WRAPPED, "wrapped"),
+    (' 3 X  name="api" port=8728 address=192.168.238.0/24\n       max-sessions=20 vrf=main\n', "wrapped"),
+    (' 0 name="api" address=1.2.3.4/32,5.6.7.8/32\n      ,9.9.9.9/32', "wrapped"),
+    (' 0 name="api" address=\n      1.2.3.4/32\n', "wrapped"),
 ])
 def test_parse_failures(text, frag):
     with pytest.raises(lib.ServiceError, match=frag):
@@ -433,3 +438,111 @@ def test_real_disabled_row_enable_command(writes_on):
     r = lib.run_module(params(from_disabled=True, from_address=[]), False, t)
     assert not r.get("failed") and r["changed"] is True
     assert t.cmds[1] == "/ip service set [find name=api] disabled=no address=192.168.238.0/24"
+
+
+# ---- review round: restore, wrapped values, conflicting rollbacks -----------------------------------
+def rparams(**kw):
+    p = params(restore=True, from_disabled=False, from_address=["10.9.9.0/24"], disabled=False, address=[])
+    p.update(kw)
+    return p
+
+
+@pytest.mark.parametrize("disabled,addr", [
+    (False, []), (False, ["10.0.0.0/8"]), (False, ["0.0.0.0/0"]), (True, []), (False, ["192.168.1.5/24"]),
+    (False, ["10.%d.0.0/16" % i for i in range(20)]), (False, ["10.0.0.%d" % i for i in range(1, 33)]),
+])
+def test_restore_accepts_any_previous_state(writes_on, disabled, addr):
+    t = Fake(text=ros_text(False, ["10.9.9.0/24"]), effect=device_effect)
+    r = lib.run_module(rparams(disabled=disabled, address=addr), False, t)
+    assert not r.get("failed") and r["changed"] is True, r
+    assert t.cmds[1] == lib.cmd_set(disabled, addr)
+    assert lib.classify(t.cmds[1]) == "write"
+
+
+def test_restore_empty_list_writes_address_empty_string(writes_on):
+    t = Fake(text=ros_text(False, ["10.9.9.0/24"]), effect=device_effect)
+    lib.run_module(rparams(), False, t)
+    assert t.cmds[1] == '/ip service set [find name=api] disabled=no address=""'
+
+
+def test_restore_requires_both_guards(writes_on):
+    for kw in (dict(from_disabled=None), dict(from_address=None), dict(from_disabled=None, from_address=None), dict(address=None)):
+        t = Fake()
+        r = lib.run_module(rparams(**kw), False, t)
+        assert r["failed"] and t.cmds == [], kw
+
+
+@pytest.mark.parametrize("bad", [["router.example.com"], ["2001:db8::1"], ["10.0.0.1;x"], ["10.0.0.1", "10.0.0.1/32"],
+                                 ["10.0.0.%d" % (i % 250 + 1) + "/32" for i in range(33)], ["010.0.0.1"], ["10.0.0.1/33"], ["10.0.0.1\n"]])
+def test_restore_still_refuses_unexpressible_values(bad):
+    t = Fake()
+    r = lib.run_module(rparams(address=bad), False, t)
+    assert r["failed"] and t.cmds == []
+
+
+def test_forward_path_validation_unchanged_without_restore():
+    for kw in (dict(address=[]), dict(address=["0.0.0.0/0"]), dict(address=["10.0.0.0/8"]), dict(address=["10.0.0.1/24"][:0] + ["1.2.3.4/0"])):
+        r = lib.run_module(params(**kw), True, Fake())
+        assert r["failed"]
+    # a forward call that merely carries from_* is not a restore
+    r = lib.run_module(params(address=[], from_disabled=False, from_address=GOOD), True, Fake())
+    assert r["failed"]
+    assert lib.ARGUMENT_SPEC["restore"] == dict(type="bool", default=False)
+
+
+def test_restore_drift_message_names_the_cause():
+    r = lib.run_module(rparams(from_address=["1.1.1.1/32"]), False, Fake(text=V7_ENABLED))
+    assert r["failed"] and "already differs from the one the change created" in r["msg"] and "restored it" in r["msg"]
+    r = lib.run_module(params(from_address=["1.1.1.1/32"]), False, Fake(text=V7_ENABLED))
+    assert "re-plan" in r["msg"]
+
+
+def test_self_restore_reports_restored_true(writes_on):
+    state = {"n": 0}
+
+    def effect(t, cmd):
+        state["n"] += 1
+        if state["n"] > 1:
+            device_effect(t, cmd)
+    r = lib.run_module(params(address=["10.9.9.0/24"]), False, Fake(text=V6_DISABLED, effect=effect))
+    assert r["failed"] and r["restored"] is True and "restored by the module itself" in r["msg"]
+
+
+def test_restore_failure_reports_restored_false(writes_on):
+    t = Fake(text=V6_DISABLED, effect=lambda t, c: setattr(t, "text", ros_text(False, ["9.9.9.9"])))
+    r = lib.run_module(params(), False, t)
+    assert r["failed"] and r["restored"] is False
+
+
+def test_read_failure_after_write_still_attempts_one_restore(writes_on):
+    class T(Fake):
+        def run(self, command):
+            if command == lib.READ_CMD and len([c for c in self.cmds if c == lib.READ_CMD]) == 1 and len(self.cmds) > 1:
+                self.cmds.append(command)
+                raise lib.ServiceError("ssh failed")        # the post-write read
+            return super().run(command)
+    t = T(text=V6_DISABLED, effect=device_effect)
+    r = lib.run_module(params(), False, t)
+    backs = [c for c in t.cmds if c.startswith("/ip service set")]
+    assert len(backs) == 2 and backs[1] == '/ip service set [find name=api] disabled=yes address=""'
+    assert r["failed"] and "could not be read after the change" in r["msg"] and r["restored"] is True
+
+
+def test_read_failure_and_restore_failure(writes_on):
+    class U(Fake):
+        def run(self, command):
+            if command == lib.READ_CMD and self.cmds:
+                self.cmds.append(command)
+                raise lib.ServiceError("ssh failed")
+            return super().run(command)
+    u = U(text=V6_DISABLED)
+    r = lib.run_module(params(), False, u)
+    assert r["failed"] and r["restored"] is False and "RESTORE FAILED" in r["msg"]
+    assert len([c for c in u.cmds if c.startswith("/ip service set")]) == 2
+
+
+def test_restore_in_ansible_docs_and_return():
+    ns = {}
+    exec(compile(MOD_PATH.read_text().split("from ansible.module_utils.basic")[0], str(MOD_PATH), "exec"), ns)
+    doc, ret = yaml.safe_load(ns["DOCUMENTATION"]), yaml.safe_load(ns["RETURN"])
+    assert doc["options"]["restore"]["type"] == "bool" and "restored" in ret

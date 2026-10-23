@@ -26,6 +26,7 @@ WRITES_ENABLED = False
 
 READ_CMD = "/ip service print detail without-paging where name=api"
 MAX_ADDRESSES = 8
+MAX_RESTORE_ADDRESSES = 32
 MIN_PREFIX = 24
 
 ARGUMENT_SPEC = dict(
@@ -38,6 +39,7 @@ ARGUMENT_SPEC = dict(
     address=dict(type="list", elements="str"),
     from_disabled=dict(type="bool"),
     from_address=dict(type="list", elements="str"),
+    restore=dict(type="bool", default=False),
 )
 
 # mirrors module_utils/airos_cfg.py SSH_OPTS (legacy SSH servers need ssh-rsa / old kex)
@@ -110,8 +112,28 @@ def validate_addresses(entries, what="address"):
     return list(entries)
 
 
+def validate_restore_addresses(entries, what="address"):
+    """Desired addresses of a RESTORE (rollback to a previous device state): anything the write shape can express.
+
+    Empty list (no restriction), IPv4 or IPv4/prefix of any length 0-32 (host bits allowed, the device accepted them once),
+    up to MAX_RESTORE_ADDRESSES entries, no duplicates after normalisation. No host names, no IPv6, no garbage."""
+    if not isinstance(entries, list):
+        raise ServiceError("%s must be a list" % what)
+    if len(entries) > MAX_RESTORE_ADDRESSES:
+        raise ServiceError("%s: at most %d entries allowed even for a restore" % (what, MAX_RESTORE_ADDRESSES))
+    seen = set()
+    for e in entries:
+        if not isinstance(e, str) or not _ADDR_RX.fullmatch(e):
+            raise ServiceError("address entry %r cannot be restored: not an IPv4 address or IPv4/prefix of the write shape" % (e,))
+        n = _norm(e)
+        if n in seen:
+            raise ServiceError("%s: duplicate entry %s" % (what, e))
+        seen.add(n)
+    return list(entries)
+
+
 def validate_params(params):
-    """Return (disabled, address or None, from_disabled or None, from_address or None)."""
+    """Return (disabled, address or None, from_disabled or None, from_address or None, restore)."""
     if params.get("service", "api") != "api":
         raise ServiceError("service must be api")
     port = params.get("port", 22)
@@ -128,9 +150,20 @@ def validate_params(params):
     if not isinstance(disabled, bool):
         raise ServiceError("disabled must be a boolean")
     address = params.get("address")
-    if address is not None:
+    restore = params.get("restore", False)
+    if not isinstance(restore, bool):
+        raise ServiceError("restore must be a boolean")
+    if restore:
+        # a restore returns the service to a PREVIOUS state, which can be anything the write shape expresses; it is only
+        # accepted with the drift guard to the state the forward change created
+        if params.get("from_disabled") is None or params.get("from_address") is None:
+            raise ServiceError("restore requires both from_disabled and from_address (the drift guard)")
+        if address is None:
+            raise ServiceError("restore requires address (an empty list restores an unrestricted state)")
+        address = validate_restore_addresses(address, "address")
+    elif address is not None:
         address = validate_addresses(address, "address")
-    if disabled is False and not address:
+    if not restore and disabled is False and not address:
         raise ServiceError("address must be a non-empty list when disabled is false (enabling the API without a "
                            "source restriction is refused)")
     fd = params.get("from_disabled")
@@ -141,7 +174,7 @@ def validate_params(params):
         if not isinstance(fa, list) or not all(isinstance(x, str) for x in fa):
             raise ServiceError("from_address must be a list of strings")
         fa = [x.strip() for x in fa]
-    return disabled, address, fd, fa
+    return disabled, address, fd, fa, restore
 
 
 # --- parsing ------------------------------------------------------------------------------------------
@@ -158,19 +191,36 @@ def _entries(text):
             continue
         m = _ENTRY_RX.match(line)
         if m:
-            out.append([m.group(2).replace(" ", ""), m.group(3).strip()])
+            out.append([m.group(2).replace(" ", ""), m.group(3).strip(), [m.group(3)]])
         elif out:
             body = line.strip()
             out[-1][1] += body if out[-1][1].endswith(",") else " " + body
+            out[-1][2].append(line)
     return out
+
+
+_ADDR_LAST_RX = re.compile(r'address=(?:"[^"]*"|\S*)\s*$')
+
+
+def _address_wrapped(lines):
+    """True when the address value may continue on a following line: `address=` is the last token of a line that is
+    followed by a continuation line (a wrapped list, e.g. a continuation starting with a comma). `address=""` is complete."""
+    for i, line in enumerate(lines[:-1]):
+        m = _ADDR_LAST_RX.search(line)
+        if m and m.group(0).rstrip() != 'address=""':
+            return True
+    return False
 
 
 def parse_service(text):
     """Return {'disabled': bool, 'address': [str]} for the single `api` row or raise ServiceError."""
     rows = []
-    for flags, body in _entries(text):
+    for flags, body, lines in _entries(text):
         kv = dict((k, v.strip('"')) for k, v in _KV_RX.findall(body))
         if kv.get("name") == "api":
+            if _address_wrapped(lines):
+                raise ServiceError("the address value of service api is wrapped over several lines in the device output; "
+                                   "refusing to guess (no change made)")
             rows.append((flags, kv, True))
     if not rows:  # `key: value` layout of a single record (name: api / disabled: no)
         kv = {}
@@ -203,6 +253,7 @@ def parse_service(text):
 
 # --- command generation and classification ------------------------------------------------------------
 _ADDR_CMD = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}(?:/(?:3[0-2]|[12]?\d))?"
+_ADDR_RX = re.compile(_ADDR_CMD)
 _WRITE_RX = re.compile(r'^/ip service set \[find name=api\] disabled=(?:yes|no) address=(?:""|%s(?:,%s)*)\Z'
                        % (_ADDR_CMD, _ADDR_CMD))
 
@@ -285,15 +336,20 @@ def run_module(params, check_mode, transport):
     """Returns the result dict; `failed` is True on failure. Never raises for expected failures."""
     result = {"changed": False, "msg": "", "diff": {"before": {}, "after": {}}, "current": {}}
     try:
-        disabled, address, from_disabled, from_address = validate_params(params)
+        disabled, address, from_disabled, from_address, restore = validate_params(params)
         t = GuardedTransport(transport)
         cur = _read(t)
         result["current"] = _view(cur)
         result["diff"] = {"before": _view(cur), "after": _view(cur)}
         if (from_disabled is not None and from_disabled != cur["disabled"]) or \
-                (from_address is not None and sorted(map(_norm, from_address)) != sorted(map(_norm, cur["address"]))) :
-            result.update(failed=True, msg="device changed since the plan was made (the api service no longer matches "
-                          "from_disabled/from_address); re-plan")
+                (from_address is not None and sorted(map(_norm, from_address)) != sorted(map(_norm, cur["address"]))):
+            if restore:
+                msg = ("state already differs from the one the change created (the module may have restored it itself, "
+                       "or the change was never made); nothing restored")
+            else:
+                msg = ("device changed since the plan was made (the api service no longer matches "
+                       "from_disabled/from_address); re-plan")
+            result.update(failed=True, msg=msg)
             return result
         target = {"disabled": disabled, "address": list(address) if address is not None else list(cur["address"])}
         result["diff"] = {"before": _view(cur), "after": _view(target)}
@@ -316,19 +372,27 @@ def run_module(params, check_mode, transport):
             raise ServiceError("cannot express the new or the previous state with the write shape (unusual address "
                                "entries on the device); nothing was written")
         t.run(forward)
-        after = _read(t)
-        if _same(after, target):
+        try:
+            after = _read(t)
+            problem = "" if _same(after, target) else "verification failed after the change"
+        except ServiceError:
+            after, problem = None, "the device could not be read after the change"
+        if not problem:
             result.update(changed=True, msg="changed service api", diff={"before": _view(cur), "after": _view(after)},
                           current=_view(after))
             return result
-        note = "; previous values restored"
+        # one restore attempt, whatever went wrong after the write; the playbook's own rescue then sees the restored
+        # state and reports that the state differs from the one the change created
+        restored, note = False, "; RESTORE FAILED, check the device"
         try:
             t.run(back)
-            if not _same(_read(t), cur):
+            if _same(_read(t), cur):
+                restored, note = True, "; previous values restored by the module itself (restored: true)"
+            else:
                 note = "; RESTORE ALSO FAILED, check the device"
         except ServiceError:
-            note = "; RESTORE FAILED, check the device"
-        result.update(failed=True, changed=False, msg="verification failed after the change" + note)
+            pass
+        result.update(failed=True, changed=False, restored=restored, msg=problem + note)
         return result
     except ServiceError as e:
         result.update(failed=True, changed=False, msg=str(e))

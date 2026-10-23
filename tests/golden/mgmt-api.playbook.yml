@@ -91,6 +91,7 @@
           from_disabled: false
           from_address:
           - 192.168.238.111/32
+          restore: true
         check_mode: true
       - name: 'R6-off: stop after rollback'
         ansible.builtin.assert:
@@ -163,6 +164,7 @@
           from_disabled: false
           from_address:
           - 192.168.238.111/32
+          restore: true
         check_mode: true
       - name: 'R6-open: stop after rollback'
         ansible.builtin.assert:
@@ -238,6 +240,7 @@
           from_disabled: false
           from_address:
           - 192.168.238.111/32
+          restore: true
         check_mode: true
       - name: 'R7-other: stop after rollback'
         ansible.builtin.assert:

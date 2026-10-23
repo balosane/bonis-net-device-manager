@@ -44,6 +44,13 @@ part of the fleet, so the API-based modules cannot reach those routers. Delibera
 - `address` is required and non-empty when `disabled: false`. Every entry is validated: canonical IPv4 (no leading zeros), prefix
   /24 or longer, no 0.0.0.0/8, loopback, multicast, reserved or broadcast, no duplicates, at most 8. With `disabled: true` it is
   optional (validated and written when given, otherwise the current restriction is kept).
+- `restore` (bool, default false): used ONLY by the rollback task in a generated playbook's `rescue:`. Accepts any previous state the
+  write shape can express as the desired value (empty `address` = `address=""`, prefixes /0-/32, host bits, up to 32 entries, no
+  duplicates, IPv4 only) but only together with BOTH `from_disabled` and `from_address` (guard to the state the change created).
+  Without `restore` every validation above is unchanged. On a drift failure with `restore` the message says the state already
+  differs from the one the change created (the module may have restored it).
+- After a failed write the module restores the previous values once (also when the post-write read fails) and returns
+  `restored: true|false`; the message says so. An `address` value wrapped over several lines in the device output is refused.
 - Drift guard: if `from_disabled` / `from_address` is given and the device differs (`from_address: []` = no restriction),
   the module fails with `changed: false` right after the read.
 - Returns `changed`, `msg`, `diff` (`before`/`after` with only `disabled` and `address` of `api`), `current`. Supports `check_mode` and `diff`.

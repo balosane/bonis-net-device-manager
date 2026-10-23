@@ -23,6 +23,24 @@ _CIDR = rf"{_O}(?:\.{_O}){{3}}(?:/(?:3[0-2]|[12]?[0-9]))?"
 _CIDRLIST = re.compile(rf"{_CIDR}(?:,{_CIDR})*")
 
 
+MAX_RESTORE_ADDRESSES = 32      # what the routeros_service module accepts for a restore
+_ADDR_LAST = re.compile(r'address=(?:"[^"]*"|\S*)\s*$')
+_ENTRY_LINE = re.compile(r"^\s*\d+\s")
+
+
+def _address_wrapped(text: str) -> bool:
+    """True when the `api` row's address may continue on a following line (a wrapped list)."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines[:-1]):
+        if 'name="api"' not in line:
+            continue
+        m = _ADDR_LAST.search(line)
+        nxt = lines[i + 1]
+        if m and m.group(0).rstrip() != 'address=""' and nxt.strip() and not _ENTRY_LINE.match(nxt):
+            return True
+    return False
+
+
 def _is_v4(text: str) -> bool:
     try:
         return str(ipaddress.IPv4Address(text)) == text
@@ -236,6 +254,10 @@ class RouterOsDriver(Driver):
         """Enable the plain API service and restrict it to the intent's addresses. Only the service `api` is touched
         (never ssh, winbox, www, api-ssl ...). The write is `/ip service set [find name=api] ...`; the rollback restores the
         previous `disabled` and `address`."""
+        if _address_wrapped(live[SERVICE_API]):
+            dp.unsupported.append("the address value of service `api` is wrapped over several lines in the device output; "
+                                  "refusing to guess (no change planned)")
+            return
         row = next((r for r in ros_records(live[SERVICE_API]) if r.get("name") == "api"), None)
         if row is None:
             dp.unsupported.append(f"cannot find the service `api` in the output of {SERVICE_API!r}")
@@ -249,6 +271,10 @@ class RouterOsDriver(Driver):
         if have and not _CIDRLIST.fullmatch(have):
             dp.unsupported.append(f"current api address list {have!r} is not a plain list of IPv4 addresses/prefixes; "
                                   "refusing to plan a rollback")
+            return
+        if len(have.split(",")) > MAX_RESTORE_ADDRESSES:
+            dp.unsupported.append(f"current api address list has more than {MAX_RESTORE_ADDRESSES} entries; "
+                                  "the rollback could not be restored by the module")
             return
         want = ",".join(intent.networks)
         try:

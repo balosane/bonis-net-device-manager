@@ -90,13 +90,26 @@ later be only the transport that runs an approved plan.
 ## mgmt-api: enabling the RouterOS API (BONISISP-47)
 
 - **What**: `MgmtApi(allowed)` -> `/ip service set [find name=api] disabled=no address=<allowed>`. Feature `mgmt-api` (`protect: true`:
-  it guards the controller's access path; enforcement of `protect` is future work), capability `mgmt.api` (RouterOS only; airOS is `n/a`).
+  it guards the controller's access path; enforcement of `protect` is future work), capability `mgmt.api` (RouterOS only; airOS models lack the capability, so the matrix shows `invalid` "lacks capability mgmt.api"; `n/a` would appear only for a capable model without a driver).
 - **Chicken and egg**: the normal path (`api_modify`/`api_info`) needs the API, which is off on 10 of 21 routers. So this feature is
   executed by the SSH module `bonis.netdev.routeros_service` (contract below). It is the only RouterOS step that does not use
   `community.routeros`, and for the same reason the precheck is not an `api_info` read: the gate is the module in check mode.
 - **Module contract**: args `host`, `username`/`password` (`netdev_user`/`netdev_pass`), `service: api`, `disabled` (bool), `address`
   (list), optional `from_disabled` (bool) and `from_address` (list, `[]` = unrestricted); no `port` (SSH 22); returns `changed`, `diff`,
-  `current`. With `from_*` it fails when the device does not hold that state.
+  `current`, and `restored` after a failed write. With `from_*` it fails when the device does not hold that state.
+  Optional `restore` (bool, default false): set ONLY by the rollback task in `rescue:`. It lets the module write any previous state
+  the write shape can express as the desired value (empty address list -> `address=""`, any prefix /0-/32 with host bits, up to 32
+  entries, no duplicates after normalisation, IPv4 only) and is accepted only together with BOTH `from_disabled` and `from_address`
+  (the drift guard to the state the forward change created). The forward path keeps all its validation (non-empty address when
+  enabling, /24 or longer, max 8, canonical). The renderer never emits `restore` in a gate, change or verify task, and
+  `verify_playbook` compares the whole play, so a tampered flag is rejected.
+- **Conflicting rollbacks**: if the module's own verification fails after a write it restores the previous values once and returns
+  `restored: true` (the message says so); it also attempts that one restore when the post-write read fails. The playbook's rescue
+  then finds the state already restored, and its restore call fails with "state already differs from the one the change created (module
+  may have restored it)". Likewise, with writes disabled the change fails before writing and the rescue reports the same message
+  instead of a misleading drift error about the plan.
+- **Wrapped output**: an `api` row whose address value is wrapped over several lines (the address is the last token of a line that is
+  followed by a continuation) is refused by both the driver (`unsupported`) and the module (error, no write); nothing is guessed.
 - **Rendering**: GATE (module, plan's previous values as `from_*`, literal `check_mode: true`) outside the rescued group; inside it the
   change (same `from_*` guard; check_mode follows `netdev_check_only`), verify (new values as `from_*` and desired, literal check_mode,
   `assert not changed`, only when not check-only); `rescue:` rollback = previous values as desired, new values as `from_*`. The
@@ -105,8 +118,9 @@ later be only the transport that runs an approved plan.
   Bare addresses are written as `/32`; intent order is kept. Previous address lists are restored as read if they match the command
   shape (even a wide one), otherwise the device is `unsupported`. A previously open (unrestricted) enabled API gets the note
   "API was open to everyone; this narrows it". RouterOS prints a disabled service with flags `XI`; X means disabled, `I` without `X` is `unsupported`.
-- **Cleartext trade-off**: the plain API (8728) sends credentials unencrypted. Accepted inside the management network because the service
-  is restricted to the controller address(es); `api-ssl` (certificates, TLS) is not supported yet (`netdev_api_tls` stays false).
+- **Cleartext trade-off**: the plain API (8728) sends credentials unencrypted. Restricting `address` limits who can CONNECT, not who
+  can sniff: the credentials cross every hop between the controller and the router in cleartext. This is accepted because that path is
+  the management network. `api-ssl` (certificates, TLS) is tracked as future work (`netdev_api_tls` stays false).
 - **Ordering**: `mgmt-api` must run before any `api_modify` feature on such a router (apply the `api-bootstrap` template first).
 - **Lockout analysis**: only the `api` service row is touched (`[find name=api]` is in every shape; ssh, winbox, www, telnet, ftp are
   not). SSH, the transport of this feature, is never changed, so the controller keeps its access; a wrong list can at worst lock out the

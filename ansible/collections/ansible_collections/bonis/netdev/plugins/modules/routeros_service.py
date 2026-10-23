@@ -57,6 +57,15 @@ options:
     description: Drift guard for the address list (C([]) means no restriction currently). Same semantics as I(from_disabled).
     type: list
     elements: str
+  restore:
+    description:
+      - Plain restore of a PREVIOUS state (used by the rollback of a generated playbook, only in C(rescue:)). Accepts as desired
+        values anything the write shape can express (an empty I(address) list (no restriction), any prefix length /0-/32 with
+        host bits, up to 32 entries, no duplicates, IPv4 only). Requires both I(from_disabled) and I(from_address), the drift
+        guard to the state the forward change created; otherwise the module refuses. The forward path (default false) keeps all
+        its validation.
+    type: bool
+    default: false
 attributes:
   check_mode:
     support: full
@@ -95,6 +104,10 @@ diff:
   description: C(before) and C(after), each with the keys C(disabled) and C(address) of the C(api) service only.
   returned: always
   type: dict
+restored:
+  description: Present on a failed write only. True when the module restored the previous values itself (the message says so).
+  returned: when a write failed
+  type: bool
 current:
   description: C(disabled) and C(address) as read from the device (empty when the read failed).
   returned: always

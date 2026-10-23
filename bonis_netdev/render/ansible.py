@@ -171,10 +171,15 @@ def _svc_values(ctx: _Ctx, command: str | None, what: str) -> tuple[bool, list[s
     return dis == "yes", ([] if addr == '""' else [_safe(a, "address") for a in addr.split(",")])
 
 
-def _svc_args(ctx: _Ctx, target: tuple[bool, list[str]], current: tuple[bool, list[str]]) -> dict:
+def _svc_args(ctx: _Ctx, target: tuple[bool, list[str]], current: tuple[bool, list[str]], restore: bool = False) -> dict:
     """Arguments of bonis.netdev.routeros_service: the desired state and the state the device must be in now (from_*)."""
-    return {"host": ctx.host, "username": "{{ netdev_user }}", "password": "{{ netdev_pass }}", "service": "api",
+    args = {"host": ctx.host, "username": "{{ netdev_user }}", "password": "{{ netdev_pass }}", "service": "api",
             "disabled": target[0], "address": list(target[1]), "from_disabled": current[0], "from_address": list(current[1])}
+    if restore:
+        # ONLY the rollback in `rescue:` sets this: it lets the module write a previous state that the forward validation
+        # would refuse (unrestricted, wide list); the from_* guard stays mandatory
+        args["restore"] = True
+    return args
 
 
 def _render_svc_gate(ctx: _Ctx, change: Step) -> list[dict]:
@@ -222,7 +227,8 @@ def _render_update(ctx: _Ctx, command: str, purpose: str, kind: str, verb: str, 
     if kind == "routeros" and _ROS_SVC_SET.match(command):
         # the change guards on the previous values (from the rollback); the rollback guards on the values the change set
         return [ctx.task(f"{verb} {purpose}", M_SERVICE,
-                         _svc_args(ctx, _svc_values(ctx, command, verb), _svc_values(ctx, counterpart, "counterpart")))]
+                         _svc_args(ctx, _svc_values(ctx, command, verb), _svc_values(ctx, counterpart, "counterpart"),
+                                   restore=(verb == "rollback")))]
     if kind == "routeros" and (m := _ROS_DNS_SET.match(command)):
         return [ctx.task(f"{verb} {purpose}", M_MODIFY,
                          {**ctx.conn(), "path": "ip dns", "data": [{"servers": m.group(1)}], **_IGNORE})]

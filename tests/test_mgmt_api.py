@@ -275,7 +275,8 @@ def test_render_structure_gate_outside_rescue():
     assert assert_["ansible.builtin.assert"]["that"] == [f"not {verify['register']}.changed"]
     assert assert_["when"] == "not (netdev_check_only | bool)"
     rollback, stop = group["rescue"]
-    assert rollback[MOD] == {**g, "disabled": True, "address": [], "from_disabled": False, "from_address": [J]}
+    assert rollback[MOD] == {**g, "disabled": True, "address": [], "from_disabled": False, "from_address": [J],
+                             "restore": True}
     assert rollback["check_mode"] == "{{ netdev_check_only | bool }}"
     assert "ansible.builtin.assert" in stop and stop["ansible.builtin.assert"]["that"] == ["false"]
 
@@ -525,3 +526,160 @@ def test_real_ros7_enabled_unrestricted_tolerates_vrf_and_max_sessions():
 def test_invalid_flag_without_disabled_is_unsupported():
     dp = planned(7, 'Flags: X - disabled, I - invalid \n 0 I  name="api" port=8728 address="" \n')
     assert dp.steps == [] and "invalid" in dp.unsupported[0]
+
+
+# ------------------------------------------------------------------ review round: restore flag, wrapped values
+import importlib.util
+import re as _re
+
+_COLL = os.path.join(HERE, "..", "ansible", "collections", "ansible_collections", "bonis", "netdev")
+_spec = importlib.util.spec_from_file_location("rs_lib", os.path.join(_COLL, "plugins", "module_utils", "routeros_service.py"))
+rs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(rs)
+
+
+def _device(text):
+    class T(rs.Transport):
+        def __init__(self):
+            self.text, self.cmds = text, []
+
+        def run(self, command):
+            self.cmds.append(command)
+            if command == rs.READ_CMD:
+                return self.text
+            m = _re.match(r'/ip service set \[find name=api\] disabled=(yes|no) address=(.*)$', command)
+            addrs = [] if m.group(2) == '""' else m.group(2).split(",")
+            self.text = ' 3 %sname="api" port=8728 address=%s\n' % ("X " if m.group(1) == "yes" else "  ", ",".join(addrs) or '""')
+            return ""
+    return T()
+
+
+def _rescues(play):
+    out = []
+
+    def walk(tasks, in_rescue):
+        for t in tasks:
+            if "block" in t:
+                walk(t["block"], in_rescue)
+                walk(t.get("rescue", []), True)
+            elif MOD in t:
+                out.append((in_rescue, t))
+    walk(play["tasks"], False)
+    return out
+
+
+def _p(a, **kw):
+    """Module parameters as Ansible would pass them after templating the credentials."""
+    return {**a, "username": "u", "password": "pw", "host": "10.0.0.23", "port": 22, "service": "api", **kw}
+
+
+def _state_text(disabled, addrs):
+    return ' 3 %sname="api" port=8728 address=%s\n' % ("X " if disabled else "  ", ",".join(addrs) or '""')
+
+
+START_STATES = {
+    "disabled+unrestricted": samples.SERVICE_API_REAL_6_OFF,
+    "enabled+unrestricted": samples.SERVICE_API_REAL_7_OPEN,
+    "enabled+other": samples.SERVICE_API_7_ON_OTHER,
+    "enabled+wide": _state_text(False, ["10.0.0.0/8", "0.0.0.0/0"]),
+    "enabled+host-bits": _state_text(False, ["192.168.1.5/24"]),
+    "enabled+9-entries": _state_text(False, ["10.0.0.%d" % i for i in range(1, 10)]),
+    "disabled+with-list": _state_text(True, ["10.1.1.0/24", "10.2.2.2"]),
+}
+
+
+@pytest.fixture
+def writes_on(monkeypatch):
+    monkeypatch.setattr(rs, "WRITES_ENABLED", True)
+
+
+@pytest.mark.parametrize("name", sorted(START_STATES))
+def test_every_rescue_task_restores_the_start_state(name, writes_on):
+    text = START_STATES[name]
+    dp = planned(7, text)
+    assert dp.changes == 1 and not dp.unsupported, (name, dp.unsupported)
+    play = yaml.safe_load(render_playbook(Plan(MgmtApi((J,)).as_dict(), [dp]), check_only=False))[0]
+    tasks = _rescues(play)
+    assert [r for r, _ in tasks].count(True) == 1
+    (_, rescue), = [x for x in tasks if x[0]]
+    assert rescue[MOD]["restore"] is True
+    # the device is in the state the forward change created; the rescue module call must restore the start state
+    dev = _device(_state_text(False, [J]))
+    r = rs.run_module(_p(rescue[MOD]), False, dev)
+    assert not r.get("failed") and r["changed"] is True, r
+    assert dev.cmds[1] == dp.steps[1].rollback, dev.cmds
+    assert dev.cmds[1].startswith("/ip service set [find name=api] disabled=")
+
+
+def test_restore_of_unrestricted_issues_address_empty_string(writes_on):
+    dp = planned(7, samples.SERVICE_API_REAL_7_OPEN)
+    play = yaml.safe_load(render_playbook(Plan(MgmtApi((J,)).as_dict(), [dp]), check_only=False))[0]
+    (_, rescue), = [x for x in _rescues(play) if x[0]]
+    dev = _device(_state_text(False, [J]))
+    rs.run_module(_p(rescue[MOD]), False, dev)
+    assert dev.cmds[1] == '/ip service set [find name=api] disabled=no address=""'
+
+
+def test_goldens_rescue_tasks_run_through_the_module(writes_on):
+    play = yaml.safe_load(open(GOLDEN, encoding="utf-8").read())[0]
+    n = 0
+    for in_rescue, t in _rescues(play):
+        if not in_rescue:
+            continue
+        n += 1
+        a = t[MOD]
+        # simulate the post-change device: from_* is exactly what the forward change created
+        dev = _device(_state_text(a["from_disabled"], a["from_address"]))
+        r = rs.run_module(_p(a), False, dev)
+        assert not r.get("failed") and r["changed"], r
+        assert dev.cmds[1] == rs.cmd_set(a["disabled"], a["address"])
+        # without the drift guard the module refuses
+        for drop in ("from_disabled", "from_address"):
+            b = {k: v for k, v in a.items() if k != drop}
+            assert rs.run_module(_p(b), False, _device(dev.text))["failed"]
+    assert n == 3
+
+
+def test_renderer_emits_restore_only_in_rescue():
+    for check_only in (True, False):
+        play = yaml.safe_load(render_playbook(api_plan(), check_only=check_only))[0]
+        for in_rescue, t in _rescues(play):
+            assert (t[MOD].get("restore") is True) == in_rescue, t["name"]
+    assert "restore: false" not in render_playbook(api_plan())
+
+
+def test_verify_rejects_restore_flag_on_forward_tasks():
+    p = api_plan()
+    for idx, path in ((0, "gate"), (1, "change")):
+        def fn(pl, idx=idx):
+            body = devblock(pl, "R6-off")
+            (body[0] if idx == 0 else body[1]["block"][0])[MOD]["restore"] = True
+        v = verify_playbook(doc_of(p), edited(p, fn))
+        assert v, path
+    def verify_task(pl):
+        devblock(pl, "R6-off")[1]["block"][1][MOD]["restore"] = True
+    assert verify_playbook(doc_of(p), edited(p, verify_task))
+    def drop_restore(pl):
+        devblock(pl, "R6-off")[1]["rescue"][0][MOD].pop("restore")
+    assert verify_playbook(doc_of(p), edited(p, drop_restore))
+
+
+def test_driver_refuses_wrapped_address_and_over_32_entries():
+    wrapped = ' 0 name="api" address=1.2.3.4/32,5.6.7.8/32\n      ,9.9.9.9/32'
+    dp = planned(7, wrapped)
+    assert dp.steps == [] and "wrapped" in dp.unsupported[0]
+    dp = planned(7, 'Flags: X\n 0 X  name="api" port=8728 address=10.0.0.0/24,\n      10.1.0.0/24 vrf=main\n')
+    assert dp.steps == [] and "wrapped" in dp.unsupported[0]
+    many = _state_text(False, ["10.0.%d.0/24" % i for i in range(33)])
+    dp = planned(7, many)
+    assert dp.steps == [] and "more than 32" in dp.unsupported[0]
+    assert planned(7, _state_text(False, ["10.0.%d.0/24" % i for i in range(32)])).changes == 1
+    # a later row after the api row is not a continuation
+    two = ' 0   name="api" port=8728 address=10.1.1.0/24\n 1   name="ssh" port=22 address=""\n'
+    assert planned(7, two).changes == 1
+
+
+def test_airos_mgmt_api_is_invalid_for_missing_capability(tmp_path):
+    (tmp_path / "d.yml").write_text("ap: {model: Ubiquiti LHG-5, templates: [api-bootstrap]}\n")
+    res = compile_config(load_config(SEED, tmp_path / "d.yml"))
+    assert res[0].status == "invalid" and "lacks capability mgmt.api" in res[0].reason
