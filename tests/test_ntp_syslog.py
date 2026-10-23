@@ -77,6 +77,8 @@ def test_syslog_intent_validation():
     for bad in ("tik.example", "2001:db8::1", "192.168.6.1\n", "192.168.06.1", "1.2.3"):
         with pytest.raises(IntentError):
             Syslog(bad)
+    for port in (1, 65535):
+        assert Syslog("10.0.0.1", port).port == port
     for port in (0, 65536, -1, "514", True, None):
         with pytest.raises(IntentError):
             Syslog("10.0.0.1", port)
@@ -237,14 +239,30 @@ def test_airos_ntp_hostname_unchanged():
 
 
 def test_airos_ntp_changed_and_second_server_creates_keys():
-    t = xw()
+    t = xw("ntpclient.2.status=disabled\n")        # the pair is created while its status is NOT enabled: a rollback leaves it inert
     dp = plan_of(AirosDriver(), Ntp((A, B)), t)
     c = change(dp)[0]
     base = dp.state_fingerprint
     assert c.command == (f"airos-cfg-set base={base} ntpclient.1.server={A} ntpclient.2.server={B} ntpclient.2.status=enabled")
-    assert c.rollback == "airos-cfg-set base=current ntpclient.1.server=tik.skamanet.cz"
+    assert c.rollback == "airos-cfg-set base=current ntpclient.1.server=tik.skamanet.cz ntpclient.2.status=disabled"
     assert any("ntpclient.2.server" in n and "was unset" in n for n in dp.notes)
     assert dp.steps[2].expect == c.command.split(" ", 2)[2]
+
+
+@pytest.mark.parametrize("extra", ["", "ntpclient.2.status=enabled\n", "ntpclient.2.status=\n"])
+def test_airos_refuses_to_create_a_key_a_rollback_would_leave_active(extra):
+    dp = plan_of(AirosDriver(), Ntp((A, B)), xw(extra))
+    assert dp.steps == [] and "ntpclient.2.server does not exist yet" in dp.unsupported[0] and "rollback would leave" in dp.unsupported[0]
+
+
+def test_airos_syslog_refuses_creating_remote_keys_while_enabled_or_unknown():
+    for drop in (("syslog.remote.ip",), ("syslog.remote.port",)):
+        dp = plan_of(AirosDriver(), Syslog("192.168.6.1", 514), xw(drop=drop))
+        assert dp.steps == [] and "rollback would leave" in dp.unsupported[0]
+    cfg = samples.SYSTEM_CFG_XW.replace("syslog.remote.status=enabled", "syslog.remote.status=disabled")
+    cfg = "\n".join(l for l in cfg.splitlines() if not l.startswith("syslog.remote.ip"))
+    dp = plan_of(AirosDriver(), Syslog("192.168.6.1"), samples.airos_cfg_transport(cfg + "\n"))
+    assert change(dp)[0].rollback.endswith("syslog.remote.status=disabled")
 
 
 def test_airos_ntp_enables_missing_status_keys():
@@ -315,7 +333,7 @@ def ntp_plan() -> Plan:
     intent = Ntp((A, B), reason="demo")
     devs = [plan_of(RouterOsDriver(6), intent, ros6(), "R6"),
             plan_of(RouterOsDriver(7), Ntp((A, "tik.skamanet.cz"), reason="demo"), ros7(), "R7"),
-            plan_of(AirosDriver(), intent, xw(), "AP1")]
+            plan_of(AirosDriver(), intent, xw("ntpclient.2.status=disabled\n"), "AP1")]
     return Plan(intent.as_dict(), devs)
 
 
@@ -422,10 +440,10 @@ def test_verify_rejects_edited_plan_commands():
 
 
 def test_renderer_denies_unmapped_shapes():
-    # a classified-but-unmapped RouterOS command stays a RenderError; ports outside 1-65535 are refused by the renderer
+    # a classified-but-unmapped RouterOS command stays a RenderError; ports outside 1-65535 and bad octets are not mapped
     dp = plan_of(RouterOsDriver(7), Syslog("192.168.6.1"), samples.ros_syslog_transport(samples.LOG_ACTIONS_NETDEV))
     dp.steps[1].command = "/system logging action set [find name=netdev-remote] remote=192.168.6.1 remote-port=99999"
-    with pytest.raises(RenderError, match="not a port"):
+    with pytest.raises(RenderError, match="no Ansible mapping"):
         render_playbook(Plan(Syslog("192.168.6.1").as_dict(), [dp]))
     dp = plan_of(RouterOsDriver(7), Ntp((A,)), ros7())
     dp.steps[0].expect = "enabled=yes servers=a;b"
@@ -530,7 +548,7 @@ def test_cli_loads_ntp_and_syslog_intents(tmp_path):
                       ("intent: ntp\nservers: [a.example]\nserver: x\n", "unknown field server"),
                       ("intent: syslog\nport: 514\n", "host is required"),
                       ("intent: syslog\nhost: 1.2.3.4\nport: 0\n", "port"),
-                      ("intent: ntp\nservers: ['a.example\\n']\n", "not an IP address or host name"),
+                      ("intent: ntp\nservers: ['a.example\\n']\n", "not an IPv4 address or host name"),
                       ("intent: firewall\n", "must be one of")):
         f.write_text(text)
         with pytest.raises(IntentError, match=msg):
@@ -550,3 +568,80 @@ def test_cli_plan_writes_ntp_plan(tmp_path, monkeypatch, capsys):
     assert doc["intent"]["intent"] == "ntp" and doc["writes_allowed"] is False
     assert {d["driver"] for d in doc["devices"]} == {"routeros6", "airos"}
     assert verify_playbook(doc, render_playbook(__import__("bonis_netdev.render", fromlist=["plan_from_dict"]).plan_from_dict(doc))) == []
+
+
+# ------------------------------------------------------------------ empty server lists (RouterOS factory defaults)
+EMPTY7 = "         enabled: no\n            mode: unicast\n         servers: \n             vrf: main\n"
+LEGACY_OFF = samples.NTP_PRINT_6.replace("enabled: yes", "enabled: no").replace(f"primary-ntp: {A}", "primary-ntp: 0.0.0.0")
+
+
+def ntp_roundtrip(driver, transport, intent=Ntp((A,))):
+    dp = plan_of(driver, intent, transport)
+    plan = Plan(intent.as_dict(), [dp])
+    text = render_playbook(plan)
+    assert verify_playbook(doc_of(plan), text) == []
+    assert verify_playbook(doc_of(plan), render_playbook(plan, check_only=False)) == []
+    return dp, text
+
+
+def test_empty_server_list_ros7_renders_and_verifies():
+    dp, text = ntp_roundtrip(RouterOsDriver(7), ros7(EMPTY7))
+    assert dp.steps[0].expect == "enabled=no servers=" and change(dp)[0].rollback is None
+    asserts = [c for a in mods(text, "ansible.builtin.assert") for c in a["that"]]
+    assert any(".servers | default('', true) | string) == ''" in c for c in asserts)         # precheck: really empty
+    assert any(f"== '{A}'" in c and ".servers" in c for c in asserts)                          # verify: the new list
+    assert any("enabled | default(false) | bool) == false" in c for c in asserts)
+
+
+def test_empty_server_list_jinja_evaluates_for_missing_none_and_empty():
+    jinja2 = pytest.importorskip("jinja2")
+    dp, text = ntp_roundtrip(RouterOsDriver(7), ros7(EMPTY7))
+    cond = next(c for a in mods(text, "ansible.builtin.assert") for c in a["that"] if "default('', true)" in c and "== ''" in c)
+    expr = jinja2.Environment().compile_expression(cond)
+    for row in ({"enabled": False}, {"enabled": False, "servers": ""}, {"enabled": False, "servers": None}):
+        assert expr(netdev_r_0_1={"result": [row]}) is True
+    assert expr(netdev_r_0_1={"result": [{"enabled": False, "servers": "1.2.3.4"}]}) is False
+
+
+def test_legacy_unset_primary_and_disabled_renders_and_verifies():
+    dp, text = ntp_roundtrip(RouterOsDriver(6), ros6(LEGACY_OFF))
+    assert dp.steps[0].expect == "enabled=no primary-ntp=0.0.0.0 secondary-ntp=0.0.0.0"
+    assert change(dp)[0].rollback == "/system ntp client set enabled=no primary-ntp=0.0.0.0 secondary-ntp=0.0.0.0"
+    asserts = [c for a in mods(text, "ansible.builtin.assert") for c in a["that"]]
+    assert any("['primary-ntp']" in c and "'0.0.0.0'" in c for c in asserts)
+    assert mods(text, "community.routeros.api_modify")[1]["data"] == [{"enabled": False, "primary-ntp": "0.0.0.0", "secondary-ntp": "0.0.0.0"}]
+
+
+# ------------------------------------------------------------------ unusable addresses
+@pytest.mark.parametrize("bad", ["0.0.0.0", "255.255.255.255", "127.0.0.1", "127.255.255.254", "224.0.0.1", "239.255.255.250",
+                                 "240.0.0.1", "169.254.1.1", "192.168.06.1"])
+def test_unusable_addresses_are_rejected_in_both_intents(bad):
+    with pytest.raises(IntentError):
+        Ntp((bad,))
+    with pytest.raises(IntentError):
+        Syslog(bad)
+
+
+def test_ntp_ipv6_message_is_explicit_and_hostnames_stay_allowed():
+    with pytest.raises(IntentError, match="IPv6 addresses are not supported"):
+        Ntp(("2001:db8::1",))
+    assert Ntp(("tik.skamanet.cz", "10.0.0.1", "192.168.6.1")).servers[0] == "tik.skamanet.cz"
+
+
+@pytest.mark.parametrize("cmd", [
+    "/system ntp client set enabled=yes primary-ntp=256.1.1.1 secondary-ntp=0.0.0.0",
+    "/system ntp client set enabled=yes primary-ntp=1.2.3.999 secondary-ntp=0.0.0.0",
+    "/system ntp client set enabled=yes primary-ntp=01.2.3.4 secondary-ntp=0.0.0.0",
+    "/system logging action set [find name=netdev-remote] remote=10.0.0.1 remote-port=65536",
+    "/system logging action set [find name=netdev-remote] remote=10.0.0.1 remote-port=0",
+    "/system logging action set [find name=netdev-remote] remote=10.0.0.1 remote-port=99999",
+    "/system logging action set [find name=netdev-remote] remote=10.0.0.1 remote-port=0514",
+    "/system logging action set [find name=netdev-remote] remote=300.0.0.1 remote-port=514",
+])
+def test_classify_tightened_octets_and_ports(cmd):
+    assert effect_of(cmd) == Effect.UNKNOWN
+
+
+@pytest.mark.parametrize("port", [1, 9, 10, 514, 9999, 10000, 65535, 65500, 60000])
+def test_classify_port_boundaries_accepted(port):
+    assert effect_of(f"/system logging action set [find name=netdev-remote] remote=255.255.255.255 remote-port={port}") == Effect.UPDATE

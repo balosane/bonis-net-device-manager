@@ -37,7 +37,8 @@ class AirosDriver(Driver):
             self._plan_keys(dp, cfg, base, {
                 "syslog.remote.ip": intent.host, "syslog.remote.port": str(intent.port),
                 "syslog.remote.status": "enabled", "syslog.status": "enabled"},
-                f"syslog {intent.host}:{intent.port}")
+                f"syslog {intent.host}:{intent.port}", gated={"syslog.remote.ip": "syslog.remote.status",
+                                                              "syslog.remote.port": "syslog.remote.status"})
         elif isinstance(intent, Dns):
             self._plan_dns(dp, intent, cfg, base)
         else:
@@ -57,7 +58,8 @@ class AirosDriver(Driver):
         stale = [k for k in NTP_SERVER_KEYS[len(intent.servers):] if cfg.get(k)]
         if stale:
             dp.unsupported.append(f"{stale} would stay set; clearing a key is not planned yet")
-        self._plan_keys(dp, cfg, base, want, "ntp " + ",".join(intent.servers))
+        self._plan_keys(dp, cfg, base, want, "ntp " + ",".join(intent.servers),
+                        gated={f"ntpclient.{i}.server": f"ntpclient.{i}.status" for i in (1, 2)})
 
     def _plan_dns(self, dp, intent, cfg, base):
         if not isinstance(intent.scope, Resolver):
@@ -73,11 +75,23 @@ class AirosDriver(Driver):
         self._plan_keys(dp, cfg, base, want, "resolver " + ",".join(want.values()))
 
     @staticmethod
-    def _plan_keys(dp, cfg, base, want, label):
+    def _plan_keys(dp, cfg, base, want, label, gated=None):
+        """`gated` maps a key to the status key that switches it on. A rollback restores only keys that had a value, so a
+        key CREATED by this change would stay behind; that is harmless only if the status key is back to a non-enabled
+        value after the rollback. That holds when the status key has a previous value other than `enabled` (the rollback
+        restores it). If the status key is `enabled` already, or has no previous value (the rollback cannot unset it), the
+        created key would stay active: the change is reported unsupported instead."""
         changes = {k: v for k, v in want.items() if cfg.get(k) != v}
         if not changes:
             dp.unchanged.append(label)
             return
+        for key in sorted(changes):
+            status = (gated or {}).get(key)
+            if status and not cfg.get(key) and not (cfg.get(status) and cfg.get(status) != "enabled"):
+                why = "is already enabled" if cfg.get(status) else "has no previous value to restore"
+                dp.unsupported.append(f"{key} does not exist yet and {status} {why}: a rollback would leave {key} active "
+                                      "(rollback never deletes keys); not planned")
+                return
         unset = [k for k in changes if not cfg.get(k)]
         if unset:
             dp.notes.append(f"{', '.join(sorted(unset))} was unset; rollback restores only the keys that had a value")

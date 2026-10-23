@@ -65,6 +65,18 @@ later be only the transport that runs an approved plan.
   and 7 before 7.15: IPv4 only, at most 2 servers, host names would need `server-dns-names`, reported `unsupported`); `servers`
   present -> list shape (7.15+). `parse.ros_print_map` reads `key: value` blocks (multi-line values are joined with `,`) as well
   as `key=value` detail output. Recorded captures are in `samples.py` (RouterOS 6.47.7, 7.18.2/7.24.2, airOS 5.6.11).
+- **Unusable addresses** are rejected in `Ntp` (IPv4 literals) and `Syslog`: `0.0.0.0` (unset on RouterOS, would switch the service
+  off), loopback, multicast, broadcast/reserved, link-local; dotted-quad look-alikes such as `192.168.06.1` are errors, not host
+  names. `classify.py` and the renderer also limit octets to 0-255 and `remote-port` to 1-65535 (defence in depth).
+- **IPv6 NTP servers are a deliberate current limit**: `Ntp` rejects any value with `:` at load time (clear message); RouterOS
+  legacy NTP and the command charset are IPv4/host-name only.
+- **Empty RouterOS 7.15+ server list** (factory default, `servers:` with no value) is a normal start state: precheck expect
+  `enabled=no servers=` renders as `servers | default('', true) | string == ''`, true for a missing key, None and `''`; no rollback.
+- **airOS rollback never deletes keys.** Option chosen: refuse (`unsupported`) instead of only documenting. A key that does not
+  exist yet (`ntpclient.N.server`, `syslog.remote.ip/port`) is planned only if its status key (`ntpclient.N.status`,
+  `syslog.remote.status`) has a previous value other than `enabled`, so the rollback restores it to non-enabled and the leftover
+  key is inert. If the status is already enabled, missing or empty, the leftover key would stay active and the plan says so.
+  Consequence: a second NTP server on an AP with no `ntpclient.2.status` line is `unsupported` until rollback can delete keys.
 - **Rollback of NTP**: legacy shape always has one (`0.0.0.0` = unset); list shape has none when the old list was empty (noted).
 - **RouterOS syslog is deliberately narrow**: creating logging actions/rules is a risk while writes are banned and needs a
   create-step design (open). Only an existing action `netdev-remote` with `target=remote` is updated; otherwise the device is

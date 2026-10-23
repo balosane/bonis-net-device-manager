@@ -13,7 +13,9 @@ class Effect(str, enum.Enum):
     UNKNOWN = "unknown"
 
 
-_V4 = r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}"
+_O = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+_V4 = rf"{_O}(?:\.{_O}){{3}}"
+_PORT = r"(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
 _HOSTS = r"[A-Za-z0-9][A-Za-z0-9.-]*(?:,[A-Za-z0-9][A-Za-z0-9.-]*)*"
 
 _RULES = [
@@ -28,7 +30,7 @@ _RULES = [
     (re.compile(rf"^/system ntp client set enabled=(yes|no) primary-ntp={_V4} secondary-ntp={_V4}$"), Effect.UPDATE),
     (re.compile(rf"^/system ntp client set enabled=(yes|no) servers={_HOSTS}$"), Effect.UPDATE),
     # RouterOS syslog: only an EXISTING action named netdev-remote is updated (never created, rules are never touched)
-    (re.compile(rf"^/system logging action set \[find name=netdev-remote\] remote={_V4} remote-port=[0-9]{{1,5}}$"), Effect.UPDATE),
+    (re.compile(rf"^/system logging action set \[find name=netdev-remote\] remote={_V4} remote-port={_PORT}$"), Effect.UPDATE),
     # airOS
     (re.compile(r"^cat /tmp/system\.cfg$"), Effect.READ),
     (re.compile(r"^airos-cfg-set base=([0-9a-f]{64}|current)( [a-z0-9_.]+=[^\s]*)+$", re.I), Effect.UPDATE),

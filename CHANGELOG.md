@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,
+  multicast, broadcast/reserved, link-local; classify/renderer octets 0-255 and ports 1-65535; airOS refuses to create a key
+  that a rollback would leave active; explicit IPv6-NTP limit.
 - Features `ntp-standard` and `syslog-standard` end to end (BONISISP-46): intent `Syslog` (`Ntp` unchanged, now validated with
   `fullmatch`), RouterOS 6/7 and airOS drivers, three new RouterOS write shapes in `classify.py` (NTP legacy, NTP list,
   update of the existing `netdev-remote` logging action), renderer mappings (`api_modify` paths `system ntp client` and

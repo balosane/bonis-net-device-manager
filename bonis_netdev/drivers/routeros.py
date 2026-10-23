@@ -17,7 +17,15 @@ LOG_ACTIONS = "/system logging action print detail without-paging"
 LOG_ACTION_NAME = "netdev-remote"
 LOG_ACTION_ONE = f"/system logging action print detail without-paging where name={LOG_ACTION_NAME}"
 UNSET = "0.0.0.0"
-_V4 = re.compile(r"[0-9]{1,3}(\.[0-9]{1,3}){3}")
+
+
+def _is_v4(text: str) -> bool:
+    try:
+        return str(ipaddress.IPv4Address(text)) == text
+    except ValueError:
+        return False
+
+
 _HOSTLIST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*(,[A-Za-z0-9][A-Za-z0-9.-]*)*")
 
 
@@ -152,7 +160,7 @@ class RouterOsDriver(Driver):
         want_s = intent.servers[1] if len(intent.servers) > 1 else UNSET
         have_p = p.get("primary-ntp") or UNSET
         have_s = p.get("secondary-ntp") or UNSET
-        if not (_V4.fullmatch(have_p) and _V4.fullmatch(have_s)):
+        if not (_is_v4(have_p) and _is_v4(have_s)):
             dp.unsupported.append(f"current NTP values {have_p!r}/{have_s!r} are not IPv4 addresses; refusing to plan a rollback")
             return
         if p.get("server-dns-names"):
@@ -197,7 +205,7 @@ class RouterOsDriver(Driver):
             return
         have_h = act.get("remote") or UNSET
         have_p = act.get("remote-port") or "514"
-        if not (_V4.fullmatch(have_h) and re.fullmatch(r"[0-9]{1,5}", have_p)):
+        if not (_is_v4(have_h) and re.fullmatch(r"[1-9][0-9]{0,4}", have_p) and int(have_p) <= 65535):
             dp.unsupported.append(f"current action values remote={have_h!r} remote-port={have_p!r} are not plain; refusing to plan a rollback")
             return
         if (have_h, have_p) == (intent.host, str(intent.port)):

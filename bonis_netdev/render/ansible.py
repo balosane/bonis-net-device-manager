@@ -59,15 +59,17 @@ _AIROS_SET = re.compile(r"^airos-cfg-set base=([0-9a-f]{64}|current)((?: [a-z0-9
 _ROS_DNS_READ = re.compile(r"^/ip dns print$")
 _ROS_NET_READ = re.compile(r"^/ip dhcp-server network print detail without-paging where address=([0-9./]+)$")
 _ROS_PLAIN_READ = re.compile(r"^/([a-z0-9 /-]+?) print(?: detail)?(?: without-paging)?$", re.I)
-_V4 = r"[0-9]{1,3}(?:\.[0-9]{1,3}){3}"
+_O = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+_V4 = rf"{_O}(?:\.{_O}){{3}}"
+_PORT = r"(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
 _HOSTS = r"[A-Za-z0-9][A-Za-z0-9.-]*(?:,[A-Za-z0-9][A-Za-z0-9.-]*)*"
 _ROS_NTP_LEGACY_SET = re.compile(rf"^/system ntp client set enabled=(yes|no) primary-ntp=({_V4}) secondary-ntp=({_V4})$")
 _ROS_NTP_LIST_SET = re.compile(rf"^/system ntp client set enabled=(yes|no) servers=({_HOSTS})$")
 _ROS_NTP_READ = re.compile(r"^/system ntp client print$")
-_ROS_LOG_SET = re.compile(rf"^/system logging action set \[find name=netdev-remote\] remote=({_V4}) remote-port=([0-9]{{1,5}})$")
+_ROS_LOG_SET = re.compile(rf"^/system logging action set \[find name=netdev-remote\] remote=({_V4}) remote-port=({_PORT})$")
 _ROS_LOG_READ = re.compile(r"^/system logging action print detail without-paging where name=netdev-remote$")
-_NTP_EXPECT = re.compile(rf"enabled=(yes|no)(?: primary-ntp=({_V4}) secondary-ntp=({_V4})| servers=({_HOSTS}))")
-_LOG_EXPECT = re.compile(rf"remote=({_V4}) remote-port=([0-9]{{1,5}})")
+_NTP_EXPECT = re.compile(rf"enabled=(yes|no)(?: primary-ntp=({_V4}) secondary-ntp=({_V4})| servers=({_HOSTS}|))")
+_LOG_EXPECT = re.compile(rf"remote=({_V4}) remote-port=({_PORT})")
 _AIROS_READ = "cat /tmp/system.cfg"
 _HOST = re.compile(r"^[A-Za-z0-9._:-]+$")
 
@@ -277,7 +279,8 @@ def _render_read(ctx: _Ctx, step: Step, kind: str, verify: bool) -> list[dict]:
                 conds += [f"({first}['primary-ntp'] | default('') | string) == '{prim}'",
                           f"({first}['secondary-ntp'] | default('') | string) == '{sec}'"]
             else:
-                conds.append(f"({first}.servers | default('') | string) == '{servers}'")
+                # an empty list may come back as a missing key, None or '' (RouterOS 7.15+ factory default): all mean "no servers"
+                conds.append(f"({first}.servers | default('', true) | string) == '{servers}'")
             tasks.append(_assert(ctx, f"{step.purpose}: value", conds, f"{d}: NTP client does not hold {step.expect}", verify))
         return tasks
     if _ROS_LOG_READ.match(cmd):
