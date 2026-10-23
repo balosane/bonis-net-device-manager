@@ -24,6 +24,7 @@ class Device:
     site: str | None = None
     role: str | None = None
     params: dict = field(default_factory=dict)   # explicit per-device override, beats every layer
+    host: str | None = None                      # management address (from NetBox primary_ip4); not used by compile
 
 
 @dataclass(frozen=True)
@@ -117,13 +118,14 @@ def load_devices(path, templates: dict, models: dict) -> dict[str, Device]:
     return devices
 
 
-def load_config(directory, devices_file=None) -> Config:
+def load_config(directory, devices_file=None, *, with_devices: bool = True) -> Config:
+    """with_devices=False loads features, models, templates and vars only (the inventory comes from elsewhere, e.g. NetBox)."""
     base = Path(directory)
     features = load_features(base / "features")
     models = load_models(base / "models")
     templates = load_templates(base / "templates", features)
     path = devices_file or base / "devices.yml"
-    devices = load_devices(path, templates, models)
+    devices = load_devices(path, templates, models) if with_devices else {}
     declared = {p.name for f in features.values() for p in f.params}
     for dev in devices.values():
         unknown = sorted(set(dev.params) - declared)
@@ -244,3 +246,11 @@ def syslog_intents(results: list[Result]) -> list[tuple[str, Syslog]]:
             except IntentError as e:
                 raise ConfigError(f"device {r.device}: feature {r.feature}: {e}") from None
     return out
+
+
+def format_matrix(results: list[Result]) -> str:
+    """The device x feature table printed by check-templates and reconcile."""
+    rows = [("DEVICE", "MODEL", "FEATURE", "RESULT", "REASON")] + [
+        (r.device, r.model, r.feature, r.status, r.reason) for r in results]
+    w = [max(len(row[i]) for row in rows) for i in range(4)]
+    return "\n".join(("  ".join(c.ljust(w[i]) for i, c in enumerate(row[:4])) + "  " + row[4]).rstrip() for row in rows)

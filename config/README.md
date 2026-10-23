@@ -17,3 +17,31 @@
 
 `dns-standard`, `ntp-standard` (param `servers`), `syslog-standard` (params `syslog_host`, `syslog_port?`; capability
 `syslog.remote`) are implemented by the RouterOS and airOS drivers; `wifi-ap-5g` has no driver (`n/a`).
+
+## NetBox tags (`netdev reconcile`)
+
+The inventory can come from NetBox. A tag on a NetBox device selects what git config applies (desired state only):
+
+- `tpl-<template>` selects the template `<template>` from `templates/` (`tpl-core-router` -> `core-router`).
+- `feat-<feature>` adds the single feature `<feature>` from `features/` (`feat-dns-standard`).
+- Only devices with at least one such tag are managed; other devices are ignored (only counted). Other tags (`src-network-yml`,
+  `needs-review`, ...) are not ours.
+- A device is a **problem** (hard error, exit 1) if: its model is not in the catalog, it has no `primary_ip4`, a tag names an
+  unknown template/feature, or it is a placeholder (`placeholder` tag, manufacturer `Generic`, model `Generic ...`).
+- Model match: `<manufacturer> <model>` (e.g. `MikroTik hEX S`), then `<model>` alone, then the optional `aliases:` list of a
+  model in `models/*.yml` (an alias may not belong to two models).
+- Only devices with NetBox status `active` are managed; a tagged device with another status is listed as unmanaged
+  (`status <value>`).
+- Layers: region = NetBox site region slug as-is (lower-case, e.g. `mor`; none if the site has no region), site = site
+  name, role = role slug. The management address (`host`) is `primary_ip4` without the prefix length.
+- The strict layer check applies: if `vars/region.yml`, `site.yml` or `role.yml` exists, every region/site/role a NetBox device
+  uses must be a key of it (an empty entry `name: {}` is fine). Otherwise the device is a problem naming the missing key. So
+  every NetBox site name and role slug in use needs an entry.
+- `--emit` writes nothing when there is any problem or `invalid` result.
+- The seed model entries for the real NetBox device types (hEX, hEX PoE lite, RB951G-2HnD, RB433AH, CRS326, CCR1016, LHG 60G,
+  PowerBeam, PowerBox Pro) carry conservative default capabilities, to be reviewed by the network owner.
+- Names are matched lower-cased: NetBox tags are lower-cased before matching, so template and feature names in git must be
+  lower-case (the loader already rejects anything else).
+- region = the NetBox region slug, role = the role slug, but site = the NetBox site **name**: `vars/site.yml` keys must equal the
+  NetBox site name exactly (case and spaces included).
+- Status must be exactly `active`; a missing status is unmanaged (`no status`). `primary_ip4` must be an IPv4 address.

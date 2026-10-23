@@ -266,7 +266,7 @@ def cmd_selftest(a) -> int:
 
 
 def _cmd_check_templates(a) -> int:
-    from .templates import INVALID, compile_config, load_config
+    from .templates import INVALID, compile_config, format_matrix, load_config
     from .features import ConfigError
     try:
         results = compile_config(load_config(a.config, a.devices))
@@ -276,11 +276,7 @@ def _cmd_check_templates(a) -> int:
     if a.json:
         print(json.dumps([r.as_dict() for r in results], indent=2, ensure_ascii=False))
     else:
-        rows = [("DEVICE", "MODEL", "FEATURE", "RESULT", "REASON")] + [
-            (r.device, r.model, r.feature, r.status, r.reason) for r in results]
-        w = [max(len(row[i]) for row in rows) for i in range(4)]
-        for row in rows:
-            print(("  ".join(c.ljust(w[i]) for i, c in enumerate(row[:4])) + "  " + row[4]).rstrip())
+        print(format_matrix(results))
     return 1 if any(r.status == INVALID for r in results) else 0
 
 
@@ -364,6 +360,8 @@ def main(argv=None) -> int:
     p.add_argument("--devices", help="inventory file (default CONFIG/devices.yml)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=_cmd_check_templates)
+    from .reconcile import add_reconcile_parser
+    add_reconcile_parser(sub)
     p = sub.add_parser("render-playbook", help="render a stored plan as an Ansible playbook (check-only by default)")
     p.add_argument("plan")
     p.add_argument("--out")
