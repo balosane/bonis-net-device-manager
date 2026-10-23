@@ -5,3 +5,5 @@ scope: resolver
 servers: [pool.ntp.org]
 syslog_host: 192.168.6.1
 syslog_port: 514
+# mgmt-api: source addresses the RouterOS API service accepts = the management jumphost that runs the controller.
+api_allowed: [192.168.238.111/32]

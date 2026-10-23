@@ -87,6 +87,33 @@ later be only the transport that runs an approved plan.
 - **Not implemented, candidate feature `timezone-standard`**: router MOR-N29-RT-1 has time-zone-name `manual` GMT+00:00, and
   airOS APs report `system.timezone=GMT+12` with a date in 2019; NTP alone does not fix wrong zones.
 
+## mgmt-api: enabling the RouterOS API (BONISISP-47)
+
+- **What**: `MgmtApi(allowed)` -> `/ip service set [find name=api] disabled=no address=<allowed>`. Feature `mgmt-api` (`protect: true`:
+  it guards the controller's access path; enforcement of `protect` is future work), capability `mgmt.api` (RouterOS only; airOS is `n/a`).
+- **Chicken and egg**: the normal path (`api_modify`/`api_info`) needs the API, which is off on 10 of 21 routers. So this feature is
+  executed by the SSH module `bonis.netdev.routeros_service` (contract below). It is the only RouterOS step that does not use
+  `community.routeros`, and for the same reason the precheck is not an `api_info` read: the gate is the module in check mode.
+- **Module contract**: args `host`, `username`/`password` (`netdev_user`/`netdev_pass`), `service: api`, `disabled` (bool), `address`
+  (list), optional `from_disabled` (bool) and `from_address` (list, `[]` = unrestricted); no `port` (SSH 22); returns `changed`, `diff`,
+  `current`. With `from_*` it fails when the device does not hold that state.
+- **Rendering**: GATE (module, plan's previous values as `from_*`, literal `check_mode: true`) outside the rescued group; inside it the
+  change (same `from_*` guard; check_mode follows `netdev_check_only`), verify (new values as `from_*` and desired, literal check_mode,
+  `assert not changed`, only when not check-only); `rescue:` rollback = previous values as desired, new values as `from_*`. The
+  previous values come from the plan's rollback text; a change without rollback is a `RenderError`.
+- **Plan logic**: enabled and the same address set (compared as sets, `1.2.3.4` == `1.2.3.4/32`) -> `unchanged`; otherwise one change.
+  Bare addresses are written as `/32`; intent order is kept. Previous address lists are restored as read if they match the command
+  shape (even a wide one), otherwise the device is `unsupported`. A previously open (unrestricted) enabled API gets the note
+  "API was open to everyone; this narrows it". RouterOS prints a disabled service with flags `XI`; X means disabled, `I` without `X` is `unsupported`.
+- **Cleartext trade-off**: the plain API (8728) sends credentials unencrypted. Accepted inside the management network because the service
+  is restricted to the controller address(es); `api-ssl` (certificates, TLS) is not supported yet (`netdev_api_tls` stays false).
+- **Ordering**: `mgmt-api` must run before any `api_modify` feature on such a router (apply the `api-bootstrap` template first).
+- **Lockout analysis**: only the `api` service row is touched (`[find name=api]` is in every shape; ssh, winbox, www, telnet, ftp are
+  not). SSH, the transport of this feature, is never changed, so the controller keeps its access; a wrong list can at worst lock out the
+  API (not the console), and the rollback restores the previous state. The intent refuses `0.0.0.0/0`, anything wider than /24,
+  loopback, multicast and reserved addresses.
+- **Fleet write ban**: the playbook is check-only by default, `RUN_APPLY_ENABLED` and the module's `WRITES_ENABLED` are untouched.
+
 ## NetBox inventory (`netbox.py`, `inventory.py`, `reconcile.py`; BONISISP-44 phase 1)
 
 - NetBox is the source of the device list and of the *desired* template/feature assignment (tags `tpl-*`, `feat-*`); git stays
@@ -135,6 +162,7 @@ only the variables `netdev_user` / `netdev_pass`; the device address is the plan
 
 | plan step | task |
 |---|---|
+| `/ip service set [find name=api] disabled=D address=LIST` | `bonis.netdev.routeros_service` (SSH module; see "mgmt-api") with gate / `from_*` guards, no `api_info` |
 | `/ip dns set servers=A,B` | `community.routeros.api_modify` path `ip dns`, `handle_absent_entries/handle_entries_content: ignore` |
 | `/ip dhcp-server network set [find address=P] dns-server=A,B` | `api_info` + `assert` that P exists (api_modify would create it), then `api_modify` with `data: [{address: P, dns-server: A,B}]` |
 | RouterOS precheck / verify (reads) | `api_info` + `assert` against `expect`; verify tasks carry `when: not netdev_check_only` |

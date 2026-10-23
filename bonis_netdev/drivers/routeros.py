@@ -4,7 +4,7 @@ from __future__ import annotations
 import ipaddress
 import re
 
-from ..intents import Dns, DhcpNetworks, Ntp, Resolver, Syslog
+from ..intents import Dns, DhcpNetworks, MgmtApi, Ntp, Resolver, Syslog
 from ..parse import ros_print_map, ros_print_value, ros_records
 from ..plan import DevicePlan, Step
 from .base import Driver
@@ -17,6 +17,10 @@ LOG_ACTIONS = "/system logging action print detail without-paging"
 LOG_ACTION_NAME = "netdev-remote"
 LOG_ACTION_ONE = f"/system logging action print detail without-paging where name={LOG_ACTION_NAME}"
 UNSET = "0.0.0.0"
+SERVICE_API = "/ip service print detail without-paging where name=api"
+_O = r"(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])"
+_CIDR = rf"{_O}(?:\.{_O}){{3}}(?:/(?:3[0-2]|[12]?[0-9]))?"
+_CIDRLIST = re.compile(rf"{_CIDR}(?:,{_CIDR})*")
 
 
 def _is_v4(text: str) -> bool:
@@ -34,7 +38,7 @@ def _norm(servers: str | None) -> list[str]:
 
 
 class RouterOsDriver(Driver):
-    implements = frozenset({"dns-standard", "ntp-standard", "syslog-standard"})
+    implements = frozenset({"dns-standard", "ntp-standard", "syslog-standard", "mgmt-api"})
 
     def __init__(self, major: int):
         self.major = major
@@ -47,6 +51,8 @@ class RouterOsDriver(Driver):
             return [NTP]
         if isinstance(intent, Syslog):
             return [LOG_ACTIONS]
+        if isinstance(intent, MgmtApi):
+            return [SERVICE_API]
         return []
 
     def plan(self, device, intent, live, host) -> DevicePlan:
@@ -56,6 +62,9 @@ class RouterOsDriver(Driver):
             return dp
         if isinstance(intent, Syslog):
             self._plan_syslog(dp, intent, live)
+            return dp
+        if isinstance(intent, MgmtApi):
+            self._plan_mgmt_api(dp, intent, live)
             return dp
         if not isinstance(intent, Dns):
             dp.unsupported.append(f"intent {type(intent).__name__} is not supported by {self.name}")
@@ -220,4 +229,47 @@ class RouterOsDriver(Driver):
                  rollback=f"/system logging action set {find} remote={have_h} remote-port={have_p}"),
             Step("verify", LOG_ACTION_ONE, "the action must hold the new values",
                  expect=f"remote={intent.host} remote-port={intent.port}"),
+        ]
+
+    # ---------------------------------------------------------------- mgmt-api
+    def _plan_mgmt_api(self, dp, intent: MgmtApi, live):
+        """Enable the plain API service and restrict it to the intent's addresses. Only the service `api` is touched
+        (never ssh, winbox, www, api-ssl ...). The write is `/ip service set [find name=api] ...`; the rollback restores the
+        previous `disabled` and `address`."""
+        row = next((r for r in ros_records(live[SERVICE_API]) if r.get("name") == "api"), None)
+        if row is None:
+            dp.unsupported.append(f"cannot find the service `api` in the output of {SERVICE_API!r}")
+            return
+        flags = row["_flags"]
+        if "I" in flags and "X" not in flags:     # RouterOS marks a DISABLED service X and I together; I alone is something else
+            dp.unsupported.append(f"service `api` is flagged invalid without being disabled (flags {flags!r}); not touched")
+            return
+        disabled = "yes" if "X" in flags else "no"
+        have = (row.get("address") or "").strip()
+        if have and not _CIDRLIST.fullmatch(have):
+            dp.unsupported.append(f"current api address list {have!r} is not a plain list of IPv4 addresses/prefixes; "
+                                  "refusing to plan a rollback")
+            return
+        want = ",".join(intent.networks)
+        try:
+            same = ({ipaddress.IPv4Network(a, strict=False) for a in have.split(",") if a}
+                    == {ipaddress.IPv4Network(a) for a in intent.networks})
+        except ValueError:
+            dp.unsupported.append(f"current api address list {have!r} cannot be parsed; refusing to plan a rollback")
+            return
+        if disabled == "no" and same:
+            dp.unchanged.append(f"api service enabled, address={have}")
+            return
+        if disabled == "no" and not have:
+            dp.notes.append("API was open to everyone; this narrows it")
+        back_addr = have if have else '""'
+        label_old = f"{'disabled' if disabled == 'yes' else 'enabled'}, address={have or '(any)'}"
+        dp.steps += [
+            Step("precheck", SERVICE_API, "re-read the api service; it must still hold the planned old values",
+                 expect=f"disabled={disabled} address={have}"),
+            Step("change", f"/ip service set [find name=api] disabled=no address={want}",
+                 f"api service {label_old} -> enabled, address={want}",
+                 rollback=f"/ip service set [find name=api] disabled={disabled} address={back_addr}"),
+            Step("verify", SERVICE_API, "the api service must be enabled and restricted to the intent's addresses",
+                 expect=f"disabled=no address={want}"),
         ]

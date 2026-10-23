@@ -71,6 +71,36 @@ users.1.password=$1$hash
 """
 
 
+# --- /ip service (mgmt-api). RouterOS 6.47.7 recorded `print` of a router with the API off: `5 XI api 8728`
+# (X disabled, I invalid); `print detail` forms are derived from that and from the 7.x layout.
+# Real read-only captures (2026-10-23), verbatim including trailing spaces:
+SERVICE_API_REAL_6_OFF = 'Flags: X - disabled, I - invalid \n 0 XI name="api" port=8728 address="" \n'
+SERVICE_API_REAL_7_OPEN = 'Flags: X - disabled, I - invalid \n 0   name="api" port=8728 address="" vrf=main max-sessions=20 \n'
+SERVICE_API_6_OFF = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5 XI name="api" port=8728 address="" certificate=none\n')
+SERVICE_API_6_ON_OPEN = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5    name="api" port=8728 address="" certificate=none\n')
+SERVICE_API_6_ON_RESTRICTED = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5    name="api" port=8728 address=192.168.238.111/32,10.20.30.0/24 certificate=none\n')
+SERVICE_API_7_OFF = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5 XI name="api" port=8728 address="" vrf=main max-sessions=20\n')
+SERVICE_API_7_ON_RESTRICTED = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5    name="api" port=8728 address=192.168.238.111/32 vrf=main max-sessions=20\n')
+SERVICE_API_7_ON_OTHER = (
+    "Flags: X - disabled, I - invalid \n"
+    ' 5    name="api" port=8728 address=10.1.1.0/24 vrf=main max-sessions=20\n')
+
+
+def ros_service_transport(service_text: str, host="10.0.0.23", resource=RESOURCE) -> FakeTransport:
+    return FakeTransport(host, {"/system resource print": resource,
+                                "/ip service print detail without-paging where name=api": service_text})
+
+
 def ros_ntp_transport(ntp_text: str, host="10.0.0.23", resource=RESOURCE) -> FakeTransport:
     return FakeTransport(host, {"/system resource print": resource, "/system ntp client print": ntp_text})
 

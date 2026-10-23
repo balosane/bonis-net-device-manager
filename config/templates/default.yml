@@ -2,3 +2,5 @@
 core-router: [dns-standard, ntp-standard, syslog-standard]
 ptp-radio: [ntp-standard, syslog-standard]
 ap-5g: [wifi-ap-5g, ntp-standard, syslog-standard]
+# Bootstrap of the controller's API access on routers where the API service is off. Apply it before the other templates.
+api-bootstrap: [mgmt-api]

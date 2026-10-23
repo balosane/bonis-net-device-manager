@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- Feature `mgmt-api` (BONISISP-47, protected): intent `MgmtApi(allowed, reason)` (IPv4 or IPv4/prefix, canonical, not wider than /24, max 8),
+  RouterOS 6/7 driver (`/ip service print detail without-paging where name=api`; X = disabled, I next to X tolerated), two anchored
+  write shapes in `classify.py` (`/ip service set [find name=api] disabled=yes|no address=LIST`, and `address=""` for rollbacks),
+  renderer module `bonis.netdev.routeros_service` (SSH module: gate outside the rescue, `from_*` guards, verify with literal check_mode,
+  rollback in `rescue:`; no `api_info` because the API may be off), `mgmt_api_intents`, `load_intent` key `mgmt-api`, seed feature,
+  capability `mgmt.api` on all RouterOS models, template `api-bootstrap`, global `api_allowed`, golden `mgmt-api.playbook.yml`,
+  selftest check 15. airOS: `n/a`. Enforcement of `protect: true` is future work.
 - Renderer: every `api_info` task passes `hide_defaults: false`. Found by a live `--check` run on RouterOS 6.47.7: `api_info` hides values equal to the
   collection defaults (`secondary-ntp` 0.0.0.0, empty `servers`, `enabled` no), so the NTP precheck asserted a value that was not returned.
 - Review fixes for ntp/syslog: empty RouterOS 7.15+ server list renders (`servers=` expect); `Ntp`/`Syslog` reject 0.0.0.0, loopback,

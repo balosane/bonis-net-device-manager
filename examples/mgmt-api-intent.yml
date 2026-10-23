@@ -1,0 +1,6 @@
+# Intent: enable the plain RouterOS API service and restrict it to these source addresses (IPv4 or IPv4/prefix, canonical,
+# not wider than /24, at most 8). Only the service `api` is touched. RouterOS only; airOS devices are reported as unsupported.
+intent: mgmt-api
+allowed:
+  - 192.168.238.111/32
+reason: "bootstrap: API for the controller"

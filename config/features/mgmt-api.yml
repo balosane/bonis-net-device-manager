@@ -1,0 +1,10 @@
+# Enables the plain RouterOS API service (port 8728) restricted to the controller address(es), so that the normal
+# api_modify path works on routers where the API is off. Order: this feature must run BEFORE any api_modify feature.
+name: mgmt-api
+domain: mgmt-api
+requires: [mgmt.api]
+params:
+  api_allowed: list
+intent: mgmt-api
+# protect: the feature guards the controller's own access path. Enforcement of `protect` (break-glass for removal) is future work.
+protect: true
